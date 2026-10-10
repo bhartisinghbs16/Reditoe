@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "Reditoe Vendor",
+    "slug": "reditoe-vendor",
+    "version": "1.0.10",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "reditoevendor",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "icon": "./assets/expo.icon"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#000000"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.reditoe.vendor",
+      "versionCode": 16,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "allowBackup": false,
+      "googleServicesFile": "./google-services.json"
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "./plugins/with-release-signing",
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Reditoe uses your location once, to record where your restaurant is so nearby riders can be matched to your orders."
+        }
+      ],
+      "./plugins/with-no-session-backup"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true,
+      "baseUrl": "/merchant"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "70de0b76-2784-4ceb-bd39-3a27ba03f868"
+      }
+    },
+    "owner": "pillai.mk13"
+  }
+}

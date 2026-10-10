@@ -1,0 +1,30 @@
+# The Reditoe admin console.
+#
+# `next start` serves the build produced by `next build`; it does not build
+# anything itself. deploy.sh runs the build before restarting this.
+
+[Unit]
+Description=Reditoe Admin Console
+After=network-online.target reditoe-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/srv/reditoe/admin
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/npx next start -p 3000
+
+Restart=always
+RestartSec=5
+
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reditoe-admin
+
+[Install]
+WantedBy=multi-user.target

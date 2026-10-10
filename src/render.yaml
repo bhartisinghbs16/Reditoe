@@ -1,0 +1,101 @@
+# Deploying the API.
+#
+# The apps have the API's address compiled into them, so it has to live
+# somewhere that stays put. A tunnel does not: it only answers while the
+# machine that opened it is awake, and a phone with that address baked in
+# stops working the moment the laptop sleeps.
+#
+# Render reads this file when the repository is connected. Everything below is
+# set except the secrets, which are marked `sync: false` and are asked for in
+# the dashboard on first deploy.
+#
+#   1. render.com -> New -> Blueprint, and point it at this repository
+#   2. fill in the values it asks for (see each one below)
+#   3. deploy, then check https://<name>.onrender.com/api/health
+#   4. seed it once - a new database has no accounts in it at all, so there
+#      is nothing to sign in with until this has been run:
+#
+#        cd backend
+#        MONGODB_URI="<the same connection string>" npm run seed:demo
+#
+#      Running it again later is safe; it updates rather than duplicates.
+#
+# Then put that address into build-apps.sh and build the apps.
+
+services:
+  - type: web
+    name: reditoe-api
+    runtime: node
+    rootDir: backend
+    plan: free
+    # No build step - the API is plain Node. Dev dependencies are skipped, so
+    # the in-memory MongoDB used by `npm run dev:local` is not installed here.
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Next 16 and Expo need 20; the default is older.
+      - key: NODE_VERSION
+        value: "20"
+
+      # PORT is injected by Render and read by server.js. Do not set it.
+
+      # A real database. The free in-memory one is for local development only
+      # and loses everything on restart. MongoDB Atlas has a free tier:
+      # create a cluster, add a database user, allow access from anywhere
+      # (0.0.0.0/0, since Render's outbound address is not fixed on the free
+      # plan), and paste the mongodb+srv:// string here.
+      - key: MONGODB_URI
+        sync: false
+
+      # Any long random string. Signing key for the login tokens - changing it
+      # signs everybody out.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Where the platform is reached from: the origin serving the consoles and
+      # the exported apps, not this API's own address. Vendor invitation links
+      # point here, so it has to be somewhere the recipient can open.
+      - key: PUBLIC_APP_URL
+        sync: false
+
+      # Which browser origins may call this API. Phones are unaffected - they
+      # send no origin - so this is only about the two consoles. Left unset,
+      # every origin is allowed, which is the right starting point; set it to
+      # a comma-separated list once the consoles have permanent addresses.
+      # A refused origin is logged, and the browser blocks the response.
+      # - key: ALLOWED_ORIGINS
+      #   sync: false
+
+      # Payments. Until both are set the API tells the apps that online payment
+      # is switched off and orders are placed with payment pending, which keeps
+      # the platform usable while the Razorpay account is being set up.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+
+      # One-time codes. With neither of these the code is returned in the API
+      # response and shown on screen, which is demo behaviour, not live
+      # behaviour. Set the Brevo key to send them by email, the Twilio three to
+      # send them by SMS, or both.
+      - key: BREVO_API_KEY
+        sync: false
+      # MSG91 carries the texts. The template has to be approved by the
+      # operator before it will send anything, and must have a variable
+      # named OTP for the code to go into.
+      - key: MSG91_AUTH_KEY
+        sync: false
+      - key: MSG91_TEMPLATE_ID
+        sync: false
+      - key: MSG91_SENDER_ID
+        sync: false
+
+# Note on uploaded files: menu photographs and vendor documents are written to
+# backend/uploads on disk, and Render's free plan gives a container a fresh
+# filesystem on every deploy - so those files do not survive one. A persistent
+# disk (paid) or an object store such as S3 or Cloudinary is needed before this
+# carries anything that matters.

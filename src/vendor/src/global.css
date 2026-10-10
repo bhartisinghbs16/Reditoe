@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * React Native Web renders TextInput as a native <input>, which brings the
+ * browser's default focus ring — a hard black box that doesn't belong in this
+ * design. Removed here, and each field draws its own focus state instead, so
+ * keyboard users still get a visible cue.
+ */
+input,
+textarea,
+select,
+[contenteditable] {
+  outline: none !important;
+  box-shadow: none;
+}
+
+/* Keep a real focus cue for keyboard navigation on non-text controls. */
+:focus-visible {
+  outline: 2px solid #e10b0f;
+  outline-offset: 2px;
+}
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}

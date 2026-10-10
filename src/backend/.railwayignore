@@ -1,0 +1,9 @@
+# Local secrets and machine-specific state never go up with `railway up`.
+# Production values live in Railway's Variables tab instead.
+.env
+.env.*
+!.env.example
+node_modules
+uploads/*
+!uploads/.gitkeep
+*.log

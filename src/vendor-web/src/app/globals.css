@@ -1,0 +1,289 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ==========================================================================
+   Design system — a copy of the client's Reditoe vendor reference screens.
+
+   Reditoe red on a near-white page, white cards with a hairline border and a
+   12px radius, a white sidebar whose active row is a red-tinted pill, and
+   pastel circular icon tiles (green / blue / amber / violet / red) carrying
+   every metric. Nothing here is an interpretation — the tokens below are the
+   reference's own palette.
+   ========================================================================== */
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-sans);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-axis: var(--chart-axis);
+
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+
+  /* Semantic status colors, used by badges / metrics / charts */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-muted: var(--success-muted);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-muted: var(--warning-muted);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-muted: var(--info-muted);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-danger-muted: var(--danger-muted);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* Surfaces — near-white page, white cards, exactly as the reference shows. */
+  --background: oklch(0.977 0.002 250);
+  --foreground: oklch(0.22 0.01 260);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.01 260);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.01 260);
+
+  /* Brand — Reditoe red, the same step the admin console uses. */
+  --primary: oklch(0.577 0.245 27.6);
+  --primary-foreground: oklch(0.99 0.005 90);
+  --secondary: oklch(0.968 0.004 250);
+  --secondary-foreground: oklch(0.35 0.012 260);
+
+  --muted: oklch(0.968 0.004 250);
+  --muted-foreground: oklch(0.53 0.014 258);
+  --accent: oklch(0.958 0.025 25);
+  --accent-foreground: oklch(0.5 0.2 27.6);
+
+  --destructive: oklch(0.586 0.22 20);
+  --border: oklch(0.925 0.005 255);
+  --input: oklch(0.925 0.005 255);
+  --ring: oklch(0.577 0.245 27.6);
+
+  /* Status */
+  --success: oklch(0.596 0.145 163);
+  --success-foreground: oklch(0.44 0.12 163);
+  --success-muted: oklch(0.957 0.035 163);
+  --warning: oklch(0.75 0.16 70);
+  --warning-foreground: oklch(0.51 0.13 66);
+  --warning-muted: oklch(0.965 0.045 85);
+  --info: oklch(0.62 0.16 250);
+  --info-foreground: oklch(0.47 0.17 254);
+  --info-muted: oklch(0.955 0.03 250);
+  --danger: oklch(0.586 0.22 20);
+  --danger-foreground: oklch(0.5 0.19 22);
+  --danger-muted: oklch(0.958 0.028 20);
+
+  /* Categorical chart slots. Fixed order — assigned in sequence, never cycled.
+     Slot 1 is the reference's own chart violet; the brand red sits at slot 4 so
+     a two-series chart never reads as "brand vs not-brand". */
+  --chart-1: #6d28d9; /* violet  */
+  --chart-2: #22a45d; /* green   */
+  --chart-3: #2563eb; /* blue    */
+  --chart-4: #e8112d; /* red     */
+  --chart-5: #d97706; /* amber   */
+  --chart-6: #0d9488; /* teal    */
+  --chart-7: #db2777; /* pink    */
+  --chart-8: #ea580c; /* orange  */
+
+  /* Chart chrome — recessive, one step off the surface. */
+  --chart-surface: #ffffff;
+  --chart-grid: oklch(0.94 0.008 256);
+  --chart-axis: oklch(0.72 0.03 258);
+
+  /* Sidebar — white, per the vendor web reference. The active row is a
+     red-tinted pill rather than a filled bar. */
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.36 0.012 260);
+  --sidebar-primary: oklch(0.577 0.245 27.6);
+  --sidebar-primary-foreground: oklch(0.99 0.005 90);
+  --sidebar-accent: oklch(0.962 0.022 25);
+  --sidebar-accent-foreground: oklch(0.5 0.2 27.6);
+  --sidebar-border: oklch(0.925 0.005 255);
+  --sidebar-ring: oklch(0.577 0.245 27.6);
+}
+
+.dark {
+  --background: oklch(0.185 0.012 264);
+  --foreground: oklch(0.96 0.008 260);
+  --card: oklch(0.235 0.014 264);
+  --card-foreground: oklch(0.96 0.008 260);
+  --popover: oklch(0.235 0.014 264);
+  --popover-foreground: oklch(0.96 0.008 260);
+
+  --primary: oklch(0.66 0.215 27.6);
+  --primary-foreground: oklch(0.99 0.005 90);
+  --secondary: oklch(0.29 0.014 264);
+  --secondary-foreground: oklch(0.94 0.01 260);
+
+  --muted: oklch(0.29 0.014 264);
+  --muted-foreground: oklch(0.72 0.02 262);
+  --accent: oklch(0.33 0.06 25);
+  --accent-foreground: oklch(0.88 0.1 27);
+
+  --destructive: oklch(0.68 0.19 22);
+  --border: oklch(1 0 0 / 11%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.66 0.215 27.6);
+
+  --success: oklch(0.7 0.14 163);
+  --success-foreground: oklch(0.82 0.14 163);
+  --success-muted: oklch(0.32 0.06 163);
+  --warning: oklch(0.8 0.15 75);
+  --warning-foreground: oklch(0.87 0.14 82);
+  --warning-muted: oklch(0.33 0.06 70);
+  --info: oklch(0.7 0.15 250);
+  --info-foreground: oklch(0.82 0.12 250);
+  --info-muted: oklch(0.3 0.06 252);
+  --danger: oklch(0.68 0.19 22);
+  --danger-foreground: oklch(0.8 0.14 22);
+  --danger-muted: oklch(0.32 0.07 22);
+
+  /* Dark steps for the same eight hues, lifted to clear 3:1 on the dark card. */
+  --chart-1: #8b5cf6;
+  --chart-2: #34d399;
+  --chart-3: #60a5fa;
+  --chart-4: #fb7185;
+  --chart-5: #fbbf24;
+  --chart-6: #2dd4bf;
+  --chart-7: #f472b6;
+  --chart-8: #fb923c;
+
+  --chart-surface: #1e2430;
+  --chart-grid: oklch(1 0 0 / 9%);
+  --chart-axis: oklch(0.58 0.02 258);
+
+  --sidebar: oklch(0.21 0.014 264);
+  --sidebar-foreground: oklch(0.86 0.012 260);
+  --sidebar-primary: oklch(0.66 0.215 27.6);
+  --sidebar-primary-foreground: oklch(0.99 0.005 90);
+  --sidebar-accent: oklch(0.33 0.06 25);
+  --sidebar-accent-foreground: oklch(0.88 0.1 27);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.66 0.215 27.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  /* Tabular numerals everywhere numbers are compared vertically. */
+  table,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* Section label above sidebar groups and card clusters. */
+  .label-eyebrow {
+    @apply text-[0.6875rem] font-semibold tracking-[0.08em] text-muted-foreground uppercase;
+  }
+
+  /* The standard surface used for every panel in the app. The reference draws
+     cards with a hairline and almost no shadow — the border does the work. */
+  .surface {
+    @apply rounded-xl border border-border bg-card;
+  }
+
+  .surface-raised {
+    @apply rounded-xl border border-border bg-card;
+    box-shadow:
+      0 1px 2px 0 oklch(0.21 0.01 265 / 0.06),
+      0 8px 24px -8px oklch(0.21 0.01 265 / 0.12);
+  }
+
+  /* Soft tinted square that holds an icon in stat cards / list rows. */
+  .icon-tile {
+    @apply flex size-10 shrink-0 items-center justify-center rounded-[0.625rem];
+  }
+
+  /* The reference's signature: a pastel circle carrying a line-art glyph. */
+  .icon-circle {
+    @apply flex size-11 shrink-0 items-center justify-center rounded-full;
+  }
+
+  /* Pill filter chip — white with a red border when selected, per the
+     reference's category strips. */
+  .chip {
+    @apply inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[0.8125rem] font-medium whitespace-nowrap transition-colors;
+  }
+  .chip-off {
+    @apply border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground;
+  }
+  .chip-on {
+    @apply border-primary bg-primary/5 text-primary;
+  }
+}
+
+@utility scrollbar-slim {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 999px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

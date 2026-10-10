@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "Reditoe",
+    "slug": "reditoe-customer",
+    "version": "1.0.16",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "reditoe",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "icon": "./assets/expo.icon"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.reditoe.app",
+      "versionCode": 24,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "googleServicesFile": "./google-services.json"
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#FFFFFF",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200
+        }
+      ],
+      "./plugins/with-google-maps-key",
+      "./plugins/with-no-session-backup",
+      "./plugins/with-release-signing"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true,
+      "baseUrl": "/app"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4b950395-a60c-4418-933a-66031bec5208"
+      }
+    },
+    "owner": "pillai.mk13"
+  }
+}

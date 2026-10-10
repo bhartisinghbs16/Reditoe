@@ -1,0 +1,32 @@
+# The Reditoe API, kept alive by systemd.
+#
+# systemd rather than a process manager: it is already on the machine, it
+# starts the API again when the box reboots, and it restarts it if it dies -
+# which is the entire job. Nothing here needs installing first.
+
+[Unit]
+Description=Reditoe API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/srv/reditoe/backend
+EnvironmentFile=/srv/reditoe/backend/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server.js
+
+Restart=always
+RestartSec=5
+
+# A crash loop should be noisy in the log, not a machine pinned at 100%.
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reditoe-api
+
+[Install]
+WantedBy=multi-user.target

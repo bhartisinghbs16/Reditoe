@@ -1,0 +1,17 @@
+node_modules/
+.env
+*.log
+.DS_Store
+dist/
+build/
+
+# Test coverage
+coverage/
+
+# Uploads and generated files
+uploads/
+debug/
+temp/
+
+# Sensitive / local-only
+real-admin-token.txt
