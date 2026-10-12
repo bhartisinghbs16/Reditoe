@@ -296,7 +296,7 @@ function OrderTrack({ order }: { order: Order }) {
               {formatNumber(itemCount)} {itemCount === 1 ? "item" : "items"}
             </Row>
             <Row icon={Wallet} label="Total Amount">
-              {currency(order.total)}
+              {currency(order.total, true)}
             </Row>
           </Panel>
 

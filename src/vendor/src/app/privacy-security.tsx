@@ -18,8 +18,8 @@ const LINKS = [
 const POINTS = [
   {
     icon: "lock-closed-outline" as const,
-    title: "Your password is never stored in readable form",
-    detail: "Nobody at Reditoe can read it, including support.",
+    title: "You sign in with a one-time code, not a password",
+    detail: "There is no password to leak or forget. Never share your code with anyone, including Reditoe support.",
   },
   {
     icon: "card-outline" as const,

@@ -4,21 +4,24 @@ import {
   identifierQuery,
   checkPasswordStrength,
 } from '../../utils/identifier.js';
+import {
+  findContactHolders,
+  alreadyRegisteredBody,
+  duplicateContactFields,
+} from '../../utils/contactRegistry.js';
 import Restaurant from '../../models/Restaurant.js';
-import { proofHolds } from '../signupVerificationController.js';
+import { proofHolds, releaseProof } from '../signupVerificationController.js';
+import { accountPayload } from '../otpAuthController.js';
+import crypto from 'crypto';
+import fs from 'fs';
 import { signToken } from '../../utils/jwt.js';
 import { sendEmail } from '../../services/emailService.js';
 import cloudStorageService from '../../services/cloudStorageService.js';
 import twilio from 'twilio';
 import smsService from '../../services/smsService.js';
-import { OAuth2Client } from 'google-auth-library';
 import { getKycDisplayStatus } from '../../utils/kycStatus.js';
 import { ensureReferralProfile, applyReferralCode } from '../../services/referralService.js';
 
-const googleClient = new OAuth2Client(
-  process.env.GOOGLE_WEB_CLIENT_ID ||
-  '136162141039-mrdgaljhv9ema00c7h32vq51936mnn7o.apps.googleusercontent.com'
-);
 
 // Uses .env loaded by preload-env.js (server.js)
 // Brevo SMTP configuration - OTP instant delivery
@@ -106,52 +109,6 @@ export const serviceStatus = async (req, res) => {
 };
 
 // Generate 6-digit OTP
-/** How long a signup code is good for. */
-const SIGNUP_OTP_TTL_MS = 10 * 60 * 1000;
-
-/**
- * Sends the signup code to whichever contact we can actually reach.
- *
- * Email first, because that is what registration always has. A mobile number
- * is used when one was given and email cannot be sent, so a deployment with
- * SMS but no mail provider still works. When neither is configured the code
- * comes back in the response outside production — otherwise signup would be
- * impossible to complete on any machine without a mail key, which is every
- * developer's.
- */
-const deliverSignupCode = async (user, otp) => {
-  const html = `
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-      <h2 style="color: #E63946;">Confirm your Reditoe account</h2>
-      <p>Your verification code is:</p>
-      <h1 style="color: #E63946; font-size: 40px; letter-spacing: 8px; text-align: center;">${otp}</h1>
-      <p>It expires in ${SIGNUP_OTP_TTL_MS / 60000} minutes.</p>
-    </div>
-  `;
-
-  if (isEmailConfigured && user.email) {
-    const sent = await sendEmail(user.email, 'Confirm your Reditoe account', html);
-    if (sent) return { sent: true, channel: 'email' };
-  }
-
-  if (isTwilioConfigured && user.phone) {
-    const sent = await smsService.sendSms({
-      to: user.phone,
-      otp,
-      role: user.role,
-      message: `Your Reditoe verification code is ${otp}.`,
-    });
-    if (sent) return { sent: true, channel: 'phone' };
-  }
-
-  console.warn(`[auth] No provider configured — signup code for ${user.email} is ${otp}`);
-  return {
-    sent: false,
-    channel: user.email ? 'email' : 'phone',
-    ...(process.env.NODE_ENV !== 'production' ? { devOtp: otp } : {}),
-  };
-};
-
 /** How long a password-reset code is good for. */
 const RESET_OTP_TTL_MS = 10 * 60 * 1000;
 /** How soon another can be asked for, so this cannot be used to spam someone. */
@@ -206,111 +163,76 @@ const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
-const isLocalRequest = (req) => {
-  const host = String(req.get('host') || '').toLowerCase();
-  const forwardedHost = String(req.get('x-forwarded-host') || '').toLowerCase();
-  const candidate = forwardedHost || host;
-  return (
-    candidate.includes('localhost') ||
-    candidate.includes('127.0.0.1') ||
-    candidate.includes('192.168.') ||
-    candidate.includes('10.') ||
-    candidate.includes('172.16.') ||
-    candidate.includes('172.17.') ||
-    candidate.includes('172.18.') ||
-    candidate.includes('172.19.') ||
-    candidate.includes('172.2') ||
-    candidate.includes('172.30.') ||
-    candidate.includes('172.31.')
-  );
-};
-
-const buildOtpSendSuccessResponse = ({
-  message,
-  deliveryMethod,
-  otp = undefined,
-}) => {
-  const response = {
-    success: true,
-    status: 'success',
-    message,
-    canProceed: true,
-    nextStep: 'otp-verify',
-    deliveryMethod,
-    delivery: {
-      method: deliveryMethod,
-      isDebug: deliveryMethod === 'debug_otp',
-    },
-    data: {
-      deliveryMethod,
-      nextStep: 'otp-verify',
-      canProceed: true,
-    },
-  };
-
-  if (otp) {
-    response.otp = otp;
-    response.data.debugOtp = otp;
-  }
-
-  return response;
-};
-
-const getOtpEmailCopyByRole = (role) => {
-  const normalizedRole = String(role || 'user').toLowerCase().trim();
-  const copyMap = {
-    user: {
-      heading: 'Reditoe OTP Verification',
-      audience: 'User',
-      subject: 'Reditoe - Your OTP Code',
-    },
-    vendor: {
-      heading: 'Reditoe Vendor OTP Verification',
-      audience: 'Vendor',
-      subject: 'Reditoe Vendor - Your OTP Code',
-    },
-    rider: {
-      heading: 'Reditoe Delivery Partner OTP Verification',
-      audience: 'Delivery Partner',
-      subject: 'Reditoe Delivery Partner - Your OTP Code',
-    },
-  };
-
-  return copyMap[normalizedRole] || copyMap.user;
-};
-
 if (process.env.NODE_ENV !== 'production') {
   console.log('[AuthController] completeProfile duplicate-email hardening active (v2)');
 }
 
-// Register - POST /api/auth/register
+/**
+ * Reads a date of birth typed as DD/MM/YYYY or sent as an ISO date.
+ *
+ * Returns null unless it is a real calendar date, in the past. Rebuilt and
+ * compared rather than trusted to `new Date`, which rolls 31/02 into March
+ * without complaint.
+ */
+const parseDateOfBirth = (value) => {
+  const raw = String(value ?? '').trim();
+  let year;
+  let month;
+  let day;
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  const local = /^(\d{2})[/-](\d{2})[/-](\d{4})$/.exec(raw);
+  if (iso) {
+    [, year, month, day] = iso;
+  } else if (local) {
+    [, day, month, year] = local;
+  } else {
+    return null;
+  }
+
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  const real =
+    date.getUTCFullYear() === Number(year) &&
+    date.getUTCMonth() === Number(month) - 1 &&
+    date.getUTCDate() === Number(day);
+  if (!real || Number(year) < 1900 || date.getTime() > Date.now()) return null;
+  return date;
+};
+
+/**
+ * Create a customer account - POST /api/auth/register
+ *
+ * The last step of signing up on the customer app. It is reached only after
+ * the mobile number has been proved by a one-time code, and that proof arrives
+ * here as `phoneProof`: the server issued it when the code came back, and an
+ * account is not created on a number without it. There is no password to
+ * choose - the number is how this account is signed into from now on.
+ *
+ * Multipart, because the profile photo travels with the rest of the details.
+ * Answers with a session, since the number has already been proved.
+ *
+ * Nobody is signed in when this is called, so the upload has already been
+ * written to disk by the time any of the checks below run. Whatever the answer
+ * turns out to be, that temporary file is removed on the way out: left alone,
+ * every refused request would keep its photo, and anyone could fill the disk
+ * with them.
+ */
 export const register = async (req, res) => {
   try {
-    const { name, email, password, phone, confirmPassword, referralCode } = req.body;
+    return await registerCustomer(req, res);
+  } finally {
+    if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+  }
+};
 
-    // Validate required fields
-    if (!name || !email || !password) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Please provide name, email, and password',
-      });
+const registerCustomer = async (req, res) => {
+  try {
+    const { name, email, phone, phoneProof, dateOfBirth, referralCode } = req.body ?? {};
+
+    if (!name || String(name).trim().length < 2) {
+      return res.status(400).json({ status: 'error', message: 'Enter your full name.' });
     }
 
-    if (String(name).trim().length < 2) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Enter your full name.',
-      });
-    }
-
-    /**
-     * The same rules the app applies, applied again here.
-     *
-     * Client-side validation is a courtesy to whoever is typing; it is not a
-     * control, because anything can post to this endpoint directly. Registration
-     * previously accepted any string as an email, any string as a password, and
-     * any string at all as a phone number.
-     */
     const emailId = readIdentifier(email);
     if (emailId.kind !== 'email') {
       return res.status(400).json({
@@ -319,61 +241,64 @@ export const register = async (req, res) => {
       });
     }
 
-    const strength = checkPasswordStrength(password);
-    if (!strength.ok) {
-      return res.status(400).json({ status: 'error', message: strength.reason });
+    const phoneId = readIdentifier(phone);
+    if (phoneId.kind !== 'phone') {
+      return res.status(400).json({ status: 'error', message: phoneId.reason });
     }
 
-    if (confirmPassword !== undefined && confirmPassword !== password) {
+    const born = parseDateOfBirth(dateOfBirth);
+    if (!born) {
       return res.status(400).json({
         status: 'error',
-        message: 'The two passwords do not match.',
+        message: 'Enter your date of birth as DD/MM/YYYY.',
       });
     }
 
-    // A mobile number is optional here, but if given it has to be a real one —
-    // it is a sign-in credential and a delivery contact, not a free-text note.
-    let normalizedPhone = '';
-    if (phone) {
-      const phoneId = readIdentifier(phone);
-      if (phoneId.kind !== 'phone') {
-        return res.status(400).json({ status: 'error', message: phoneId.reason });
-      }
-      normalizedPhone = phoneId.value;
-
-      const phoneTaken = await User.findOne({ phone: { $in: phoneId.variants } });
-      if (phoneTaken) {
-        return res.status(409).json({
-          status: 'error',
-          message: 'That mobile number is already registered. Sign in instead.',
-          code: 'PHONE_ALREADY_EXISTS',
-        });
-      }
+    if (!req.file) {
+      return res.status(400).json({ status: 'error', message: 'Add a profile photo.' });
     }
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email: emailId.value });
-    if (existingUser) {
-      return res.status(409).json({
+    if (!(await proofHolds('phone', phoneId.value, phoneProof))) {
+      return res.status(400).json({
         status: 'error',
-        message: `Email '${email}' is already registered. Please use a different email or login instead.`,
-        code: 'EMAIL_ALREADY_EXISTS',
-        existingUser: {
-          id: existingUser._id,
-          email: existingUser.email,
-          role: existingUser.role,
-          name: existingUser.name
-        }
+        code: 'contact_not_verified',
+        message: 'Verify your mobile number with the code we send before signing up.',
       });
     }
 
-    // Create new user with default walletBalance of 3000
+    /**
+     * An email address or mobile number that any account already holds cannot
+     * be registered again under this one. Answered without naming the other
+     * account.
+     */
+    const conflict = await findContactHolders({ email: emailId.value, phone: phoneId.value });
+    if (conflict) {
+      return res.status(409).json(alreadyRegisteredBody(conflict));
+    }
+
+    // Before the account exists, so a photo that cannot be stored leaves no
+    // half-made customer behind.
+    const upload = await cloudStorageService.uploadFile(req.file, 's3', {
+      category: 'profile-photos',
+      folder: 'profile-photos',
+    });
+
     const user = await User.create({
       name: String(name).trim(),
       email: emailId.value,
-      password, // Will be hashed by pre-save hook
-      phone: normalizedPhone,
-      role: req.body.role || 'user', // Use role from request or default to 'user'
+      phone: phoneId.value,
+      dateOfBirth: born,
+      role: 'user',
+      /*
+       * The schema wants a password and there is nobody to choose one. An
+       * unguessable value nobody is ever shown satisfies it and opens nothing:
+       * the only way in is the code sent to the number.
+       */
+      password: crypto.randomBytes(24).toString('base64url'),
+      profilePhoto: upload.publicUrl,
+      avatar: upload.publicUrl,
+      isProfileComplete: true,
+      accountVerified: true,
       /*
        * A new account starts with an empty wallet. It used to start with
        * 3000, which was sample data from before real payments: every customer
@@ -382,97 +307,44 @@ export const register = async (req, res) => {
       walletBalance: 0,
     });
 
-    // Auto-create referral profile
     try {
       await ensureReferralProfile(user._id);
     } catch (refErr) {
       console.log('Referral profile create error:', refErr.message);
     }
 
-    // Apply referral code if provided
     if (referralCode) {
       try {
         await applyReferralCode({
           userId: user._id,
-          code: referralCode.trim().toUpperCase()
+          code: String(referralCode).trim().toUpperCase(),
         });
-        console.log('Referral code applied:', referralCode);
       } catch (refCodeErr) {
         console.log('Referral code apply error:', refCodeErr.message);
       }
     }
 
-    /**
-     * Registration ends at "prove it's you", not at a session.
-     *
-     * Signing straight in meant an address nobody had checked could be used to
-     * register, and the brief asks for a verification step between signup and
-     * sign-in. A code goes to whichever contact was given — the email, or the
-     * mobile when one was supplied and email is not configured — and the token
-     * is issued by /auth/verify-account once it comes back.
-     *
-     * Only customers are gated. Vendors and riders arrive through their own
-     * flows, which have their own checks, and locking them out here would
-     * break both.
-     */
-    const gated = user.role === 'user';
-    let delivery = { sent: false, channel: 'email' };
+    // One use. The account exists now, and a second registration on the same
+    // number is refused above anyway; the proof has nothing left to do.
+    await releaseProof('phone', phoneId.value).catch(() => {});
 
-    if (gated) {
-      user.accountVerified = false;
-      const otp = generateOTP();
-      user.otp = otp;
-      user.otpExpires = new Date(Date.now() + SIGNUP_OTP_TTL_MS);
-      await user.save({ validateBeforeSave: false });
-      delivery = await deliverSignupCode(user, otp);
-    }
-
-    // Remove password from output
-    user.password = undefined;
-
-    const payload = {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-      walletBalance: user.walletBalance,
-      savedAddresses: user.savedAddresses,
-    };
-
-    if (!gated) {
-      return res.status(201).json({
-        status: 'success',
-        token: signToken(user._id),
-        data: { user: payload },
-      });
-    }
-
-    res.status(201).json({
+    return res.status(201).json({
       status: 'success',
-      // No token: the account is not usable until the code comes back.
-      verificationRequired: true,
-      channel: delivery.channel,
-      message: delivery.sent
-        ? `We sent a code to your ${delivery.channel === 'phone' ? 'mobile number' : 'email'}. Enter it to finish signing up.`
-        : 'Messaging is not configured on this server, so the code is shown here instead.',
-      ...(delivery.devOtp ? { devOtp: delivery.devOtp } : {}),
-      data: { user: payload },
+      token: signToken(user._id),
+      data: { user: accountPayload(user) },
     });
   } catch (error) {
-    // Handle duplicate key error specifically
-    if (error.code === 11000 && error.message.includes('duplicate key')) {
-      return res.status(409).json({
-        status: 'error',
-        message: `Email '${email}' is already registered. Please use a different email or login instead.`,
-        code: 'EMAIL_ALREADY_EXISTS'
-      });
+    /**
+     * Two requests for the same address can both pass the check above; the
+     * database stops the second.
+     */
+    const clashed = duplicateContactFields(error);
+    if (clashed) {
+      return res.status(409).json(alreadyRegisteredBody({ fields: clashed }));
     }
-    
-    res.status(400).json({
-      status: 'error',
-      message: error.message,
-    });
+
+    console.error('[auth] register failed:', error);
+    return res.status(400).json({ status: 'error', message: error.message });
   }
 };
 
@@ -481,7 +353,6 @@ export const registerVendor = async (req, res) => {
     const {
       phone,
       email,
-      password,
       restaurantName,
       cuisine,
       street,
@@ -496,12 +367,15 @@ export const registerVendor = async (req, res) => {
       referralCode,
     } = req.body;
 
-    // Accept email or phone
-    const identifier = phone || email;
-    if (!identifier || !restaurantName || !city) {
+    /*
+     * The mobile number is how a vendor signs in - by a code sent to it, there
+     * is no password - so it is required here and has to be one the vendor has
+     * proved they hold. The email address is optional.
+     */
+    if (!phone || !restaurantName || !city) {
       return res.status(400).json({
         success: false,
-        message: 'Phone or email, restaurant name and city are required',
+        message: 'Mobile number, restaurant name and city are required',
       });
     }
 
@@ -538,11 +412,9 @@ export const registerVendor = async (req, res) => {
     /**
      * The same rules the rest of the platform applies.
      *
-     * Self-registration accepted any string as an email, any string as a phone
-     * number, and a three-character password — an account created that way is
-     * one the vendor cannot be contacted on and one an attacker can walk into.
-     * The password is only checked when the vendor supplies one; the phone-only
-     * flow signs in by OTP and sets a password afterwards.
+     * Self-registration accepted any string as an email and any string as a
+     * phone number - an account created that way is one the vendor cannot be
+     * contacted on.
      */
     if (email) {
       const emailId = readIdentifier(email);
@@ -554,95 +426,69 @@ export const registerVendor = async (req, res) => {
       }
     }
 
+    let phoneId = null;
     if (phone) {
-      const phoneId = readIdentifier(phone);
+      phoneId = readIdentifier(phone);
       if (phoneId.kind !== 'phone') {
         return res.status(400).json({ success: false, message: phoneId.reason });
       }
     }
 
-    if (password !== undefined && password !== null && password !== '') {
-      const strength = checkPasswordStrength(password);
-      if (!strength.ok) {
-        return res.status(400).json({ success: false, message: strength.reason });
-      }
-      if (
-        req.body.confirmPassword !== undefined &&
-        req.body.confirmPassword !== password
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: 'The two passwords do not match.',
-        });
-      }
-    }
+    /**
+     * An email address or mobile number belongs to one account, whatever role
+     * it was registered under.
+     *
+     * This looked the identifier up and, finding any account at all, made it a
+     * vendor - so a customer's or a delivery partner's number could be
+     * registered as a restaurant, and the account behind it quietly became a
+     * vendor account. It also compared `phone` with the raw string the app
+     * sent, which never equals the stored +91 form, so a number already in use
+     * looked free and a second account was created on it.
+     *
+     * It also answered "Welcome back" with a session token whenever the
+     * address belonged to an existing vendor, no password asked: registering
+     * was a way to sign in.
+     *
+     * The one thing let through is a vendor finishing what they started: the
+     * same account, still without a restaurant, because an earlier attempt
+     * created it and then failed. Every contact detail given has to belong to
+     * that one account, and nothing about it is overwritten.
+     */
+    let user = null;
+    const conflict = await findContactHolders({ email, phone });
+    if (conflict) {
+      const [holder] = conflict.holders;
+      const sameAccountFinishing =
+        conflict.holders.length === 1 &&
+        holder.role === 'vendor' &&
+        conflict.asked.every((field) => conflict.fields.includes(field)) &&
+        !(await Restaurant.exists({ owner: holder._id }));
 
-    // Find user by phone OR email
-    let user = await User.findOne({
-      $or: [
-        { phone: identifier },
-        { email: identifier }
-      ]
-    });
-
-    if (user && user.role === 'vendor') {
-      const existingRestaurant = await Restaurant.findOne({
-        owner: user._id
-      });
-      if (existingRestaurant) {
-        const token = signToken(user._id);
-        return res.status(200).json({
-          success: true,
-          message: 'Welcome back! Redirecting to your dashboard.',
-          alreadyRegistered: true,
-          token,
-          user: {
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-            role: user.role,
-            isProfileComplete: user.isProfileComplete,
-          },
-          restaurant: {
-            _id: existingRestaurant._id,
-            name: existingRestaurant.name,
-            status: existingRestaurant.status,
-          },
-        });
+      if (!sameAccountFinishing) {
+        return res.status(409).json(alreadyRegisteredBody(conflict));
       }
+      user = await User.findById(holder._id);
     }
 
     // Create vendor user if not exists
     if (!user) {
-      // Use the password the vendor chose. This used to always generate a
-      // random one, which let signup succeed and then made signing in
-      // impossible — the vendor was never told the password that was actually
-      // stored, so every later login attempt returned "incorrect email or
-      // password" for credentials they had just set.
-      //
-      // A random password is still the fallback for callers that register
-      // without one (the phone-only flow), where a vendor signs in by OTP and
-      // sets a password afterwards.
-      const chosenPassword =
-        typeof password === 'string' && checkPasswordStrength(password).ok
-          ? password
-          : Math.random().toString(36).slice(-8) + 'V1!';
-
       user = await User.create({
         name: contactPersonName || restaurantName,
-        phone: phone || '',
+        // Saved in the +91 form every other sign-up uses, so it can be found
+        // again by the same number however it is typed.
+        phone: phoneId?.value ?? '',
         email: email || `vendor_${phone}_${Date.now()}@vendor.reditoe.com`,
-        password: chosenPassword,
+        /*
+         * The schema wants a password and a vendor signs in by code, not by
+         * password. An unguessable value nobody is ever shown satisfies it and
+         * opens nothing.
+         */
+        password: crypto.randomBytes(24).toString('base64url'),
         role: 'vendor',
         walletBalance: 0,
       });
-    } else {
-      // Update existing user to vendor role
-      user.role = 'vendor';
-      user.name = contactPersonName || user.name;
-      user.phone = phone || user.phone;
-      user.email = email || user.email;
+    } else if (contactPersonName && contactPersonName !== user.name) {
+      user.name = contactPersonName;
       await user.save();
     }
 
@@ -655,31 +501,6 @@ export const registerVendor = async (req, res) => {
       } catch (referralError) {
         console.warn('Vendor referral registration skipped:', referralError.message);
       }
-    }
-
-    // Check if restaurant already exists for this owner
-    const existingRestaurant = await Restaurant.findOne({ owner: user._id });
-    if (existingRestaurant) {
-      const token = signToken(user._id);
-      return res.status(200).json({
-        success: true,
-        message: 'Welcome back! Redirecting to your dashboard.',
-        alreadyRegistered: true,
-        token,
-        user: {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          role: user.role,
-          isProfileComplete: user.isProfileComplete,
-        },
-        restaurant: {
-          _id: existingRestaurant._id,
-          name: existingRestaurant.name,
-          status: existingRestaurant.status,
-        },
-      });
     }
 
     // Create restaurant with pending status
@@ -758,6 +579,11 @@ export const registerVendor = async (req, res) => {
       },
     });
   } catch (error) {
+    const clashed = duplicateContactFields(error);
+    if (clashed) {
+      return res.status(409).json(alreadyRegisteredBody({ fields: clashed }));
+    }
+
     console.error('Vendor registration error:', error);
     return res.status(500).json({
       success: false,
@@ -769,267 +595,29 @@ export const registerVendor = async (req, res) => {
 // Signup (alias for register - keeping for backward compatibility)
 export const signup = register;
 
-// Login - POST /api/auth/login
 /**
- * Sign in with an email address or a mobile number.
+ * Password and Google sign-in are gone.
  *
- * One box, either credential: the customer types whichever they registered
- * with and the server works out which it is. This used to take `email` alone,
- * so anyone who signed up with a mobile number had no way back into their
- * account. `emailOrPhone` is the field the apps send; `email` and `phone` are
- * still read so nothing already calling this breaks.
+ * The customer, vendor and delivery-partner apps sign in one way only - a
+ * mobile number and the one-time code sent to it (see otpAuthController). These
+ * routes still answer, with a reason, rather than falling through to "route not
+ * found": an app build that predates the change should be told what happened,
+ * not left to guess at a broken server.
+ *
+ * 410 rather than a 4xx about the credentials: nothing about what was typed is
+ * wrong, there is simply no longer anything to sign in to.
  */
-export const login = async (req, res) => {
-  try {
-    const { emailOrPhone, email, phone, password } = req.body;
-    const typed = emailOrPhone ?? email ?? phone;
+const removed = (what) => (_req, res) =>
+  res.status(410).json({
+    status: 'error',
+    success: false,
+    code: 'password_login_removed',
+    message: `${what} is no longer available. Sign in with your mobile number and the one-time code we text you.`,
+  });
 
-    if (!typed || !password) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Enter your email or mobile number, and your password.',
-      });
-    }
-
-    const identifier = readIdentifier(typed);
-    if (!identifier.kind) {
-      return res.status(400).json({ status: 'error', message: identifier.reason });
-    }
-
-    /**
-     * One message for "no such account" and "wrong password" alike. Telling
-     * them apart turns this endpoint into a way to discover who has an account.
-     */
-    /**
-     * Finds the account, tolerating numbers that were duplicated before
-     * creation started refusing them.
-     *
-     * findOne on a shared mobile number returns whichever document the index
-     * reaches first, so the other account could not be signed into at all —
-     * its owner had been handed credentials that simply did not work. Where
-     * more than one matches, the password decides which was meant. It grants
-     * nothing extra: every candidate still has to be authenticated, and the
-     * duplicate itself is now prevented at the point of creation.
-     */
-    const candidates = await User.find(identifierQuery(identifier))
-      .select('+password')
-      .sort({ createdAt: 1 })
-      .limit(5);
-
-    let user = candidates[0];
-    if (candidates.length > 1) {
-      for (const candidate of candidates) {
-        if (await candidate.comparePassword(password)) {
-          user = candidate;
-          break;
-        }
-      }
-    }
-
-    /**
-     * Invited but not yet set up.
-     *
-     * Checked before the password, because the stored one is an unguessable
-     * placeholder no vendor could ever type — comparing first meant they were
-     * told "incorrect password" forever with no hint that a link was waiting
-     * in their inbox.
-     */
-    if (user?.mustSetPassword) {
-      return res.status(403).json({
-        status: 'error',
-        code: 'PASSWORD_NOT_SET',
-        message:
-          'This account has not been set up yet. Use the set-password link emailed to you, or ask for a new one.',
-      });
-    }
-
-    if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({
-        status: 'error',
-        message:
-          identifier.kind === 'email'
-            ? 'Incorrect email or password'
-            : 'Incorrect mobile number or password',
-      });
-    }
-
-    if (user.isBlocked) {
-      return res.status(403).json({
-        status: 'error',
-        message: 'This account has been suspended. Contact support.',
-      });
-    }
-
-    /**
-     * Registered but never verified.
-     *
-     * Checked against `=== false` on purpose: the flag is only written by
-     * signup, so accounts that predate it read undefined and are let through.
-     * The code tells the app to send them to the verification step rather than
-     * leaving them at a password box that will never work.
-     */
-    if (user.accountVerified === false) {
-      return res.status(403).json({
-        status: 'error',
-        code: 'ACCOUNT_NOT_VERIFIED',
-        message: 'Confirm your account first — enter the code we sent you.',
-      });
-    }
-
-
-    // Auto-online for riders on login
-    if (user.role === 'rider') {
-      user.isOnline = true;
-      
-      // Add to online history
-      if (!user.onlineHistory) {
-        user.onlineHistory = [];
-      }
-      user.onlineHistory.push({
-        status: true,
-        timestamp: new Date(),
-      });
-      
-      // Keep only last 100 history entries
-      if (user.onlineHistory.length > 100) {
-        user.onlineHistory = user.onlineHistory.slice(-100);
-      }
-      
-      await user.save();
-    }
-
-    // Generate JWT token
-    const token = signToken(user._id);
-
-    // Return JWT token and basic user info
-    const userResponse = {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-      walletBalance: user.walletBalance,
-      savedAddresses: user.savedAddresses,
-    };
-
-    // Include rider-specific fields if user is a rider
-    if (user.role === 'rider') {
-      userResponse.isOnline = user.isOnline;
-      userResponse.riderId = user.riderId;
-      userResponse.vehicleName = user.vehicleName;
-      userResponse.vehicleNumber = user.vehicleNumber;
-      userResponse.vehicleBrand = user.vehicleBrand || '';
-      userResponse.vehicleModel = user.vehicleModel || '';
-      userResponse.currentRating = user.currentRating;
-    }
-
-    res.status(200).json({
-      status: 'success',
-      token,
-      data: {
-        user: userResponse,
-      },
-    });
-  } catch (error) {
-    res.status(400).json({
-      status: 'error',
-      message: error.message,
-    });
-  }
-};
-
-// Google Login - POST /api/auth/google
-export const googleLogin = async (req, res) => {
-  try {
-    const { idToken } = req.body;
-
-    if (!idToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'Google token is required',
-      });
-    }
-
-    const ticket = await googleClient.verifyIdToken({
-      idToken,
-      audience: [
-        process.env.GOOGLE_WEB_CLIENT_ID ||
-          '136162141039-mrdgaljhv9ema00c7h32vq51936mnn7o.apps.googleusercontent.com',
-        process.env.GOOGLE_ANDROID_CLIENT_ID ||
-          '136162141039-cjs3ok1br4ispltpgacbsfafq7e3u4s0.apps.googleusercontent.com',
-      ],
-    });
-
-    const payload = ticket.getPayload();
-    const { email, name, picture, sub: googleId } = payload;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Could not get email from Google account',
-      });
-    }
-
-    let user = await User.findOne({
-      $or: [{ email: email.toLowerCase().trim() }, { googleId }],
-    });
-    const isNewUser = !user;
-
-    if (!user) {
-      user = new User({
-        name: name || email.split('@')[0],
-        email: email.toLowerCase().trim(),
-        googleId,
-        avatar: picture,
-        role: 'user',
-        // Empty, not the 3000 of sample credit this used to grant.
-        walletBalance: 0,
-      });
-      await user.save({ validateBeforeSave: false });
-    } else {
-      if (!user.googleId) user.googleId = googleId;
-      if (!user.avatar && picture) user.avatar = picture;
-      if (!user.name && name) user.name = name;
-      await user.save({ validateBeforeSave: false });
-    }
-
-    const token = signToken(user._id);
-
-    const isProfileComplete = !!user.isProfileComplete;
-
-    return res.json({
-      success: true,
-      status: 'success',
-      message: 'Google login successful',
-      isNewUser,
-      isProfileComplete,
-      routeHint: isProfileComplete ? '/(tabs)' : '/signup',
-      data: {
-        token,
-        isNewUser,
-        isProfileComplete,
-        routeHint: isProfileComplete ? '/(tabs)' : '/signup',
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          avatar: user.avatar,
-          role: user.role,
-          walletBalance: user.walletBalance,
-          savedAddresses: user.savedAddresses,
-          isProfileComplete: !!user.isProfileComplete,
-        },
-      },
-    });
-  } catch (error) {
-    console.error('Google login error:', error);
-    return res.status(401).json({
-      success: false,
-      status: 'error',
-      message: 'Google authentication failed',
-    });
-  }
-};
+export const login = removed('Signing in with a password');
+export const googleLogin = removed('Google sign-in');
+export const setPassword = removed('Setting a password');
 
 // Get current user profile - GET /api/auth/profile (protected route)
 export const getProfile = async (req, res) => {
@@ -1134,9 +722,28 @@ export const updateProfile = async (req, res) => {
         user[key] = req.body[key];
       }
     }
-    if (req.body.phone !== undefined) {
-      const digits = String(req.body.phone).replace(/\D/g, '').slice(-10);
-      user.phone = digits ? `+91${digits}` : user.phone;
+    /*
+     * The mobile number is how this account is signed into, so a profile form
+     * cannot change it. Proving a number means a code sent to it; a form that
+     * simply saved whatever was typed would let somebody put another person's
+     * number on their own account - and that person, signing in with a code to
+     * their own phone, would land in a stranger's account while the stranger's
+     * existing session kept working. Sending back the number the account
+     * already has is harmless and accepted.
+     */
+    if (req.body.phone !== undefined && String(req.body.phone).trim() !== '') {
+      const typed = readIdentifier(req.body.phone);
+      const current = readIdentifier(user.phone);
+      const unchanged =
+        typed.kind === 'phone' && current.kind === 'phone' && typed.value === current.value;
+      if (!unchanged) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'phone_locked',
+          message:
+            'Your mobile number is how you sign in, so it cannot be changed here. Contact support to change it.',
+        });
+      }
     }
     if (req.file) {
       const provider = 's3';
@@ -1208,12 +815,14 @@ export const completeProfile = async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
     const isFirstTimeCompletion = !existingUser.isProfileComplete;
     const normalizedAlternativePhone = (alternativePhone || '').trim();
-    const normalizedPhoneDigits = String(phone || '').replace(/\D/g, '').slice(0, 10);
-    const normalizedPhoneWithCountry = normalizedPhoneDigits ? `+91${normalizedPhoneDigits}` : '';
     const hasProfilePhotoUpload = !!req.file;
     const hasExistingProfilePhoto = !!existingUser.profilePhoto;
-    const effectivePhone = (existingUser.phone && existingUser.phone.trim()) || normalizedPhoneWithCountry;
-    const hasVerifiedPhone = !!effectivePhone;
+    /*
+     * The number the account signed in with is the only one it has. It was
+     * proved by a code, and this form does not get to replace it with one that
+     * was merely typed.
+     */
+    const hasVerifiedPhone = !!(existingUser.phone && existingUser.phone.trim());
 
     if (isFirstTimeCompletion) {
       if (!dateOfBirth) {
@@ -1236,35 +845,24 @@ export const completeProfile = async (req, res) => {
       }
     }
 
-    // Prevent raw Mongo duplicate-key failures by checking email ownership upfront.
-    if (normalizedEmail !== String(existingUser.email || '').toLowerCase()) {
-      const duplicateEmailUser = await User.findOne({
-        email: normalizedEmail,
-        _id: { $ne: userId },
-      }).select('_id');
-
-      if (duplicateEmailUser) {
-        return res.status(409).json({
-          success: false,
-          code: 'EMAIL_ALREADY_EXISTS',
-          message: 'This email is already registered. Please sign in with that account or use a different email.',
-        });
-      }
-    }
-
-    // Also guard phone ownership when phone is being set/changed.
-    if (normalizedPhoneWithCountry && normalizedPhoneWithCountry !== String(existingUser.phone || '').trim()) {
-      const duplicatePhoneUser = await User.findOne({
-        phone: normalizedPhoneWithCountry,
-        _id: { $ne: userId },
-      }).select('_id');
-
-      if (duplicatePhoneUser) {
-        return res.status(409).json({
-          success: false,
-          code: 'PHONE_ALREADY_EXISTS',
-          message: 'This phone number is already registered. Please sign in with that account or use a different number.',
-        });
+    /**
+     * Guard email and phone ownership when either is being set or changed, and
+     * prevent raw Mongo duplicate-key failures.
+     *
+     * Checked across every role and every stored form of a number: the phone
+     * query here matched only the +91 form, so a number saved as bare digits
+     * under another account read as free.
+     */
+    const changingEmail = normalizedEmail !== String(existingUser.email || '').toLowerCase();
+    if (changingEmail) {
+      const conflict = await findContactHolders(
+        {
+          email: changingEmail ? normalizedEmail : undefined,
+        },
+        { exceptUserId: userId }
+      );
+      if (conflict) {
+        return res.status(409).json(alreadyRegisteredBody(conflict));
       }
     }
 
@@ -1288,7 +886,6 @@ export const completeProfile = async (req, res) => {
       isProfileComplete: true,
     };
 
-    if (normalizedPhoneWithCountry) updateData.phone = normalizedPhoneWithCountry;
     if (dateOfBirth) updateData.dateOfBirth = new Date(dateOfBirth);
     if (alternativePhone) updateData.alternativePhone = normalizedAlternativePhone;
     if (profilePhoto) {
@@ -1361,978 +958,6 @@ export const completeProfile = async (req, res) => {
       success: false,
       message: 'Failed to complete profile. Please try again.',
     });
-  }
-};
-
-// Send OTP - Production-safe with guaranteed response (supports both email and phone)
-export const sendOTP = async (req, res) => {
-  // CRITICAL: Wrap entire function to ensure response is always sent
-  try {
-    console.log('â”â”â”â”â”â”â”â” OTP REQUEST START â”â”â”â”â”â”â”â”');
-    console.log('â° Time:', new Date().toISOString());
-    
-    // Validate request body exists
-    if (!req.body) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Request body is required',
-        success: false,
-      });
-    }
-    
-    /*
-     * `mode` separates signing in from signing up.
-     *
-     * An unknown email or mobile number used to be signed up on the spot by
-     * the login box, so a customer who mistyped their address got a brand new
-     * empty account instead of being told the address was wrong - and there
-     * was no way to sign in without possibly creating something. Only the
-     * sign-up screen sends mode: 'signup'; everything else is a sign-in, and
-     * a sign-in never creates an account.
-     */
-    const { emailOrPhone, role, mode } = req.body;
-    const isSignUp = String(mode || '').toLowerCase() === 'signup';
-    console.log('ðŸ“¨ Email/Phone:', emailOrPhone);
-    console.log('ï¿½ Role:', role);
-
-    // Validate email/phone - CRITICAL: Always return response
-    if (!emailOrPhone) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Please provide email or phone number',
-        success: false,
-      });
-    }
-
-    // Check if it's an email or phone number
-    const isEmail = emailOrPhone.includes('@');
-    // Fixed phone regex: only match if it's mostly digits (no @ symbol and no letters)
-    const isPhone = !isEmail && /^\+?[1-9]\d{1,14}$/.test(emailOrPhone.replace(/[^\d+]/g, ''));
-    
-    if (!isEmail && !isPhone) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Please provide a valid email address or phone number for OTP',
-        success: false,
-      });
-    }
-
-    // Normalize the input
-    let normalizedInput;
-    let searchField;
-    if (isEmail) {
-      normalizedInput = emailOrPhone.toLowerCase().trim();
-      searchField = 'email';
-    } else {
-      // Normalize phone number to E.164 format
-      normalizedInput = emailOrPhone.replace(/[^\d+]/g, '');
-      if (!normalizedInput.startsWith('+')) {
-        // Default to +91 for Indian numbers if no country code
-        if (normalizedInput.length === 10) {
-          normalizedInput = '+91' + normalizedInput;
-        } else {
-          normalizedInput = '+' + normalizedInput;
-        }
-      }
-      searchField = 'phone';
-    }
-
-    let otp = generateOTP();
-    // Fixed OTP for demo/reviewer account only
-    if (
-      normalizedInput === 'geesoda01@gmail.com' ||
-      normalizedInput === 'geesoda01'
-    ) {
-      otp = '123456';
-    }
-    const otpExpires = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
-    /**
-     * A missing email provider is a deployment gap, not a request failure.
-     * Refusing here made OTP sign-in impossible to build against or test
-     * anywhere without a Brevo key. Production still refuses; elsewhere the
-     * request proceeds, the code is stored against the user as usual, and it
-     * is returned below instead of being sent. Verification is unchanged.
-     */
-    const isSmsUsable = () => smsService.isSmsConfigured();
-    const otpUndeliverable = isEmail && !isEmailConfigured;
-    if (otpUndeliverable && process.env.NODE_ENV === 'production') {
-      return res.status(503).json({
-        status: 'error',
-        message: 'Email service is not configured. Please try again later.',
-        success: false,
-      });
-    }
-    console.log('â±ï¸  OTP Expires:', otpExpires.toISOString());
-
-
-    // For phone: don't return 503 early - allow fallback to email if text fails
-    // The fallback logic in the text send block will handle email fallback
-    if (isPhone && !isTwilioConfigured) {
-      console.log('âš ï¸ Twilio not configured - will attempt email fallback if user has email');
-      // Continue execution - don't return here
-    }
-
-    // Find or create user - wrap in try/catch for safety
-    let user;
-    try {
-      const searchQuery = {};
-      searchQuery[searchField] = normalizedInput;
-      user = await User.findOne(searchQuery).select('+otp +otpExpires');
-    } catch (dbError) {
-      console.error('[sendOTP] DB lookup error:', dbError.message, dbError.code);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Database error. Please try again.',
-        success: false,
-      });
-    }
-
-    // Validate role if provided
-    const validRoles = ['user', 'vendor', 'rider'];
-    const requestedRole = role && validRoles.includes(role.toLowerCase()) ? role.toLowerCase() : 'user';
-
-    // Save/update user - wrap in try/catch for safety
-    try {
-      if (user) {
-        const previousRole = user.role || 'user';
-        if (previousRole !== requestedRole) {
-          user.role = requestedRole;
-        }
-        user.otp = otp;
-        user.otpExpires = otpExpires;
-        await user.save({ validateBeforeSave: false });
-
-        if (otpUndeliverable) {
-          /**
-           * The code goes to the registered mobile, whichever box it was
-           * typed into.
-           *
-           * Signing in with an email address on a platform with no email
-           * provider meant the code could not be sent at all, so it came
-           * back in the response and the app filled it in - which looks
-           * exactly like the app accepting an OTP by itself, and was
-           * reported as such. The account has a mobile number and there is a
-           * provider for that, so it is used.
-           */
-          if (isSmsUsable() && user.phone) {
-            const sent = await smsService.sendSms({
-              to: user.phone,
-              otp,
-              role: user.role,
-              message: `Your Reditoe OTP code is: ${otp}. Valid for 5 minutes. Don't share this code with anyone.`,
-            });
-
-            if (sent) {
-              const tail = String(user.phone).replace(/\D/g, '').slice(-4);
-              return res.status(200).json(
-                buildOtpSendSuccessResponse({
-                  message: `Code sent by SMS to your registered mobile ending ${tail}`,
-                  deliveryMethod: 'text',
-                })
-              );
-            }
-          }
-
-          console.warn(`[auth] No email provider configured - OTP for ${normalizedInput} is ${otp}`);
-          return res.status(200).json(
-            buildOtpSendSuccessResponse({
-              message: 'Email is not configured on this server, so the code is shown here instead.',
-              deliveryMethod: 'debug_otp',
-              otp,
-            })
-          );
-        }
-      } else {
-        /**
-         * An unknown identifier signs a customer up. It must not sign a vendor
-         * or a delivery partner up.
-         *
-         * Vendors are approved by an admin and partners go through
-         * registration and KYC; letting either be created by typing an address
-         * into a login box would hand out a vendor console to anyone who
-         * asked. Asked for on the vendor or partner app, an unknown identifier
-         * is simply not an account here.
-         */
-        if (requestedRole !== 'user') {
-          return res.status(404).json({
-            status: 'error',
-            success: false,
-            message:
-              requestedRole === 'vendor'
-                ? 'No vendor account found for that email or mobile number. Please contact Reditoe to register your restaurant.'
-                : 'No delivery partner account found for that email or mobile number. Please sign up first.',
-          });
-        }
-
-        // A sign-in stops here: there is no account to sign in to.
-        if (!isSignUp) {
-          return res.status(404).json({
-            status: 'error',
-            success: false,
-            code: 'no_account',
-            message:
-              'No account found for that email or mobile number. Please sign up first.',
-          });
-        }
-
-        // Create new user without password (will be set later)
-        if (isEmail) {
-          const userData = {
-            name: normalizedInput.split('@')[0],
-            role: requestedRole,
-            walletBalance: 0,
-            otp,
-            otpExpires,
-            email: normalizedInput,
-          };
-
-          user = new User(userData);
-          await user.save({ validateBeforeSave: false });
-
-          if (otpUndeliverable) {
-            console.warn(`[auth] No email provider configured - OTP for ${normalizedInput} is ${otp}`);
-            return res.status(200).json(
-              buildOtpSendSuccessResponse({
-                message: 'Email is not configured on this server, so the code is shown here instead.',
-                deliveryMethod: 'debug_otp',
-                otp,
-              })
-            );
-          }
-        } else {
-          // Check if phone exists with any role
-          const existingUserAnyRole = await User.findOne({
-            phone: normalizedInput
-          });
-
-          if (existingUserAnyRole) {
-            // The number is known under some role. Which role that is gets
-            // decided at verification, not here.
-            existingUserAnyRole.otp = otp;
-            existingUserAnyRole.otpExpires = otpExpires;
-            await existingUserAnyRole.save({ validateBeforeSave: false });
-            user = existingUserAnyRole;
-          } else {
-            // Create new user
-            const userData = {
-              name: `User${normalizedInput.slice(-4)}`,
-              role: requestedRole,
-              walletBalance: 0,
-              otp,
-              otpExpires,
-              phone: normalizedInput,
-            };
-
-            user = new User(userData);
-            await user.save({ validateBeforeSave: false });
-          }
-        }
-      }
-    } catch (dbError) {
-      console.error('[sendOTP] DB save error:', dbError.message, dbError.code);
-
-      // Handle duplicate key error
-      if (dbError.code === 11000) {
-        // Try finding existing user and update OTP only
-        try {
-          const searchQuery = {};
-          searchQuery[searchField] = normalizedInput;
-          const existingUser = await User.findOne(searchQuery);
-          if (existingUser) {
-            existingUser.otp = otp;
-            existingUser.otpExpires = otpExpires;
-            await existingUser.save({ validateBeforeSave: false });
-            user = existingUser;
-          }
-        } catch (retryError) {
-          console.error('[sendOTP] Retry failed:', retryError.message);
-          return res.status(500).json({
-            status: 'error',
-            message: 'Database error. Please try again.',
-            success: false,
-          });
-        }
-      } else {
-        return res.status(500).json({
-          status: 'error',
-          message: 'Database error. Please try again.',
-          success: false,
-        });
-      }
-    }
-
-    // Send OTP via appropriate service
-    let emailSent = false;
-
-  if (isEmail) {
-    console.log('â”â”â”â”â”â”â”â” STEP 1: EMAIL PREPARATION â”â”â”â”â”â”â”â”');
-      const otpCopy = getOtpEmailCopyByRole(requestedRole);
-      const subject = otpCopy.subject;
-      const html = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #E63946;">${otpCopy.heading}</h2>
-          <p>Your 6-digit OTP code for ${otpCopy.audience} registration is:</p>
-          <h1 style="color: #E63946; font-size: 48px; letter-spacing: 10px; text-align: center; padding: 20px; background: #f5f5f5; border-radius: 8px; margin: 20px 0;">${otp}</h1>
-          <p>This code will expire in 5 minutes.</p>
-          <p>If you didn't request this code, please ignore this email.</p>
-        </div>
-      `;
-      
-      console.log('ðŸ“§ Preparing email via Brevo API...');
-      console.log('ðŸ“§ To:', normalizedInput);
-      console.log('ðŸ“§ From:', EMAIL_FROM);
-      console.log('ðŸ“§ Subject:', subject);
-      
-      console.log('â”â”â”â”â”â”â”â” STEP 2: BREVO API CONFIG CHECK â”â”â”â”â”â”â”â”');
-      console.log('ðŸ”‘ BREVO_API_KEY Present:', !!process.env.BREVO_API_KEY);
-      console.log('ðŸ“§ From Email:', EMAIL_FROM);
-      console.log('ðŸ“§ Email Service:', EMAIL_SERVICE);
-      console.log('ðŸ“§ Email Configured:', isEmailConfigured);
-      console.log('ðŸ“§ SMTP Config Error:', smtpConfigError || 'None');
-      console.log('ðŸ“§ From Source:', emailFromEnv.key || 'DEFAULT');
-      
-      console.log('BREVO CONFIG:', {
-        apiKey: process.env.BREVO_API_KEY ? 'SET' : 'MISSING',
-        emailFrom: process.env.EMAIL_FROM ? 'SET' : 'MISSING',
-        legacyFrom: process.env.SENDGRID_FROM_EMAIL ? 'SET' : 'MISSING'
-      });
-      
-      console.log('â”â”â”â”â”â”â”â” STEP 3: SENDING EMAIL VIA BREVO API â”â”â”â”â”â”â”â”');
-      console.log('ðŸš€ Calling sendEmail() with await...');
-      
-      try {
-        emailSent = await sendEmail(normalizedInput, subject, html);
-        
-        if (emailSent) {
-          console.log('â”â”â”â”â”â”â”â” STEP 4: BREVO API SUCCESS â”â”â”â”â”â”â”â”');
-          console.log('âœ… EMAIL SENT VIA BREVO');
-        } else {
-          console.log('â”â”â”â”â”â”â”â” STEP 4: BREVO API FAILURE â”â”â”â”â”â”â”â”');
-          console.log('âŒ EMAIL SENDING FAILED');
-        }
-      } catch (error) {
-        console.log('â”â”â”â”â”â”â”â” STEP 4: BREVO API FAILURE â”â”â”â”â”â”â”â”');
-        console.log('âŒ EMAIL SENDING FAILED');
-        console.log('âŒ Error Message:', error.message);
-        console.log('âŒ Error Code:', error.code || 'N/A');
-        console.log('âŒ Error Stack:', error.stack);
-        console.log('âŒ Full Error Object:', error);
-        emailSent = false;
-      }
-      
-      console.log('â”â”â”â”â”â”â”â” STEP 5: EMAIL SEND RESULT â”â”â”â”â”â”â”â”');
-      console.log('ðŸ“§ Email Send Result:', emailSent);
-    } else {
-      // Send via Twilio text
-      const textMessage = `Your Reditoe OTP code is: ${otp}. Valid for 5 minutes. Don't share this code with anyone.`;
-
-      // CRITICAL FIX: If Twilio not configured, immediately try email fallback
-      /**
-       * No way to text? Fall back to email.
-       *
-       * This asked whether a Twilio client existed, which it never does on a
-       * platform that texts through MSG91 - so signing in by mobile number
-       * skipped the message entirely, fell through to email, and failed there
-       * too when email was not set up either. The question is whether a text
-       * can be sent at all, not which provider would have sent it.
-       */
-      if (!isTwilioConfigured) {
-        console.log('âš ï¸ Twilio not configured - attempting immediate EMAIL fallback...');
-        if (user && user.email) {
-          try {
-            const otpCopy = getOtpEmailCopyByRole(requestedRole);
-            const emailMessage = `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
-              <h2 style="color: #333; text-align: center;">${otpCopy.heading}</h2>
-              <div style="background-color: #fff; padding: 30px; border-radius: 8px; text-align: center; margin: 20px 0;">
-                <p style="font-size: 18px; color: #666; margin-bottom: 20px;">Your 6-digit OTP code for ${otpCopy.audience} registration is:</p>
-                <div style="font-size: 36px; font-weight: bold; color: #ff6b35; letter-spacing: 8px; margin: 20px 0;">${otp}</div>
-                <p style="font-size: 14px; color: #999; margin-top: 20px;">This code expires in 5 minutes</p>
-              </div>
-              <p style="font-size: 12px; color: #999; text-align: center;">Sent because text service is not available</p>
-            </div>`;
-
-            emailSent = await sendEmail(user.email, `${otpCopy.heading} (text Fallback)`, emailMessage);
-            
-            if (emailSent) {
-              console.log('âœ… Email fallback sent successfully to:', user.email);
-            }
-          } catch (emailFallbackError) {
-            console.error('âŒ Email fallback failed:', emailFallbackError.message);
-            emailSent = false;
-          }
-        } else {
-          console.log('âŒ No email available for fallback');
-          emailSent = false;
-        }
-      } else {
-        // Twilio is configured - try to send text
-        try {
-          console.log('ðŸ“± Sending text via Twilio...');
-          console.log('ðŸ“± To:', normalizedInput);
-          console.log('ðŸ“± From:', TWILIO_PHONE_NUMBER);
-          
-          const ok = await smsService.sendSms({
-            to: normalizedInput,
-            otp,
-            role: requestedRole,
-            message: textMessage,
-          });
-          if (!ok) throw new Error('The SMS provider refused the message');
-
-          console.log('text sent successfully');
-          emailSent = true;
-        } catch (textError) {
-          console.error('âŒ Twilio text sending failed:', textError.message);
-          console.error('âŒ Twilio Error Code:', textError.code || 'N/A');
-          
-          // CRITICAL FIX: Fallback to email when text fails
-          if (user && user.email) {
-            console.log('ðŸ“§ text failed - attempting EMAIL fallback...');
-            try {
-              const otpCopy = getOtpEmailCopyByRole(requestedRole);
-              const emailMessage = `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
-                <h2 style="color: #333; text-align: center;">${otpCopy.heading}</h2>
-                <div style="background-color: #fff; padding: 30px; border-radius: 8px; text-align: center; margin: 20px 0;">
-                  <p style="font-size: 18px; color: #666; margin-bottom: 20px;">Your 6-digit OTP code for ${otpCopy.audience} registration is:</p>
-                  <div style="font-size: 36px; font-weight: bold; color: #ff6b35; letter-spacing: 8px; margin: 20px 0;">${otp}</div>
-                  <p style="font-size: 14px; color: #999; margin-top: 20px;">This code expires in 5 minutes</p>
-                </div>
-                <p style="font-size: 12px; color: #999; text-align: center;">Sent because text delivery failed</p>
-              </div>`;
-
-              emailSent = await sendEmail(user.email, `${otpCopy.heading} (text Fallback)`, emailMessage);
-              
-              if (emailSent) {
-                console.log('âœ… Email fallback sent successfully to:', user.email);
-              }
-            } catch (emailFallbackError) {
-              console.error('âŒ Email fallback also failed:', emailFallbackError.message);
-              emailSent = false;
-            }
-          } else {
-            emailSent = false;
-          }
-        }
-      }
-    }
-
-    const allowDebugOtpFallback =
-      process.env.ALLOW_DEBUG_OTP === 'true' ||
-      process.env.NODE_ENV !== 'production' ||
-      isLocalRequest(req);
-
-    // Only return success if email/text was actually sent
-    if (!emailSent) {
-      const deliveryType = isEmail ? 'Email' : 'text';
-      console.log(`â”â”â”â”â”â”â”â” FINAL RESULT: ${deliveryType} FAILED â”â”â”â”â”â”â”â”`);
-      console.log('âŒ Returning error to client');
-      console.log(`â”â”â”â”â”â”â”â” OTP REQUEST END (FAILURE) â”â”â”â”â”â”â”â”`);
-      
-      // Determine appropriate error message based on configuration issues
-      let errorMessage;
-      let statusCode = 500;
-      
-      if (isEmail) {
-        errorMessage = smtpConfigError 
-          ? 'Invalid Brevo SMTP configuration. Please check server setup.' 
-          : 'Email sending failed - check server logs';
-      } else {
-        // Phone OTP failed - check if user has email for fallback
-        const hasEmailFallback = user && user.email;
-        
-        if (!isTwilioConfigured) {
-          // Twilio not configured
-          if (hasEmailFallback) {
-            errorMessage = 'text service not configured. OTP was sent to your email instead.';
-            statusCode = 200; // Actually succeeded via fallback
-          } else {
-            // CRITICAL FIX: Clear message for phone-only users (400 = client needs to add email)
-            errorMessage = 'Phone OTP unavailable. Please add an email address to your account for OTP recovery, or contact support.';
-            statusCode = 400; // Bad Request - user needs to provide email
-          }
-        } else {
-          // Twilio configured but text failed
-          if (hasEmailFallback) {
-            errorMessage = 'text delivery failed. OTP was sent to your email instead.';
-            statusCode = 200; // Actually succeeded via fallback
-          } else {
-            errorMessage = 'text delivery failed and no email on file for fallback. Please add an email address or contact support.';
-            statusCode = 400; // Bad Request - user needs to provide email
-          }
-        }
-      }
-      
-      // If we actually succeeded via email fallback, return success
-      if (statusCode === 200) {
-        return res.status(200).json(
-          buildOtpSendSuccessResponse({
-            message: errorMessage,
-            deliveryMethod: 'email_fallback',
-          })
-        );
-      }
-      
-      if (allowDebugOtpFallback) {
-        return res.status(200).json(
-          buildOtpSendSuccessResponse({
-            message: `${deliveryType} delivery unavailable. Using debug OTP fallback.`,
-            deliveryMethod: 'debug_otp',
-            otp,
-          })
-        );
-      }
-
-      return res.status(statusCode).json({
-        success: false,
-        message: errorMessage,
-        status: 'error',
-        errorCode: isEmail ? 'EMAIL_FAILED' : (user && user.email ? 'text_FAILED_EMAIL_FALLBACK' : 'text_FAILED_NO_FALLBACK'),
-        suggestion: !isEmail && !(user && user.email) 
-          ? 'Add an email address to your profile for reliable OTP delivery' 
-          : undefined,
-      });
-    }
-
-    console.log('â”â”â”â”â”â”â”â” FINAL RESULT: EMAIL SENT â”â”â”â”â”â”â”â”');
-    console.log('âœ… Returning success to client');
-    console.log('â”â”â”â”â”â”â”â” OTP REQUEST END (SUCCESS) â”â”â”â”â”â”â”â”');
-    return res.status(200).json(
-      buildOtpSendSuccessResponse({
-        message: `OTP sent via ${isEmail ? 'email' : 'text'}`,
-        deliveryMethod: isEmail ? 'email' : 'text',
-      })
-    );
-  } catch (error) {
-    if (!res.headersSent) {
-      return res.status(500).json({
-        status: 'error',
-        message: 'An unexpected error occurred. Please try again.',
-        success: false,
-      });
-    }
-  }
-};
-
-// Verify OTP (supports both email and phone)
-export const verifyOTP = async (req, res) => {
-  try {
-    const { emailOrPhone, otp, selectedRole, riderData } = req.body;
-
-    if (!emailOrPhone || !otp) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Please provide email/phone and OTP',
-      });
-    }
-
-    // Check if it's an email or phone number
-    const isEmail = emailOrPhone.includes('@');
-    const isPhone = /^\+?[1-9]\d{1,14}$/.test(emailOrPhone.replace(/[^\d+]/g, ''));
-    
-    if (!isEmail && !isPhone) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Please provide a valid email address or phone number',
-      });
-    }
-
-    // Normalize the input
-    let normalizedInput;
-    let searchField;
-    if (isEmail) {
-      normalizedInput = emailOrPhone.toLowerCase().trim();
-      searchField = 'email';
-    } else {
-      // Normalize phone number to E.164 format
-      normalizedInput = emailOrPhone.replace(/[^\d+]/g, '');
-      if (!normalizedInput.startsWith('+')) {
-        // Default to +91 for Indian numbers if no country code
-        if (normalizedInput.length === 10) {
-          normalizedInput = '+91' + normalizedInput;
-        } else {
-          normalizedInput = '+' + normalizedInput;
-        }
-      }
-      searchField = 'phone';
-    }
-
-    // Find user with OTP
-    const searchQuery = {};
-    searchQuery[searchField] = normalizedInput;
-    const user = await User.findOne(searchQuery).select('+otp +otpExpires');
-
-    if (!user) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'User not found. Please request a new OTP.',
-      });
-    }
-
-    // Check if OTP exists
-    if (!user.otp || !user.otpExpires) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'OTP not found. Please request a new OTP.',
-      });
-    }
-
-    // Check if OTP is expired
-    if (Date.now() > user.otpExpires.getTime()) {
-      user.otp = undefined;
-      user.otpExpires = undefined;
-      await user.save({ validateBeforeSave: false });
-
-      return res.status(400).json({
-        status: 'error',
-        message: 'OTP expired. Please request a new OTP.',
-      });
-    }
-
-    // Verify OTP
-    if (user.otp !== otp) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Invalid OTP. Please try again.',
-      });
-    }
-
-    /**
-     * The account's role decides what it is. The app only says which door was
-     * knocked on.
-     *
-     * This used to promote the account to whatever role the caller asked for,
-     * marked "flexible role switching for testing" - so a customer who could
-     * receive one OTP became a vendor simply by asking, and a rider became a
-     * vendor the same way. That was survivable only while OTP sign-in existed
-     * in the customer app alone, which always asks for 'user'. Putting the
-     * same sign-in on the vendor and partner apps turns it into a way for
-     * anyone with an email address to walk into the vendor console.
-     *
-     * A role is granted by registering or by an admin, never by choosing it at
-     * a login screen.
-     */
-    const dbRole = user.role || 'user';
-
-    if (selectedRole) {
-      const requestedRole = selectedRole.toLowerCase().trim();
-
-      if (dbRole !== requestedRole) {
-        const ACCOUNT = {
-          user: 'a customer account',
-          vendor: 'a vendor account',
-          rider: 'a delivery partner account',
-        };
-        const APP = { user: 'Reditoe', vendor: 'Reditoe Vendor', rider: 'Reditoe Delivery Partner' };
-        return res.status(403).json({
-          status: 'error',
-          message: `This is ${ACCOUNT[dbRole] || `a ${dbRole} account`}. Please sign in on the ${APP[dbRole] || dbRole} app instead.`,
-        });
-      }
-    }
-
-    // Check if user has a password set (existing user)
-    // New users don't have a password set initially
-    const userWithPassword = await User.findById(user._id).select('+password');
-    const isNewUser = !userWithPassword.password || userWithPassword.password === '';
-
-    // Handle rider-specific data if provided
-    if (selectedRole === 'rider' && riderData && isNewUser) {
-      // Update user with rider data
-      if (riderData.name) user.name = String(riderData.name).trim();
-      if (riderData.email) user.email = String(riderData.email).trim().toLowerCase();
-      if (riderData.phone) {
-        const normalizedPhone = String(riderData.phone).replace(/[^\d]/g, '').slice(-10);
-        if (normalizedPhone) {
-          user.phone = `+91${normalizedPhone}`;
-        }
-      }
-      if (riderData.dateOfBirth) {
-        const dobRaw = String(riderData.dateOfBirth).trim();
-        const [day, month, year] = dobRaw.split('/');
-        if (day && month && year) {
-          const parsedDob = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
-          if (!Number.isNaN(parsedDob.getTime())) {
-            user.dateOfBirth = parsedDob;
-          }
-        }
-      }
-      if (riderData.gender) user.gender = String(riderData.gender).trim().toLowerCase();
-      const cityOrLocation = riderData.city || riderData.location;
-      if (cityOrLocation) {
-        user.city = String(cityOrLocation).trim();
-        user.location = String(cityOrLocation).trim();
-      }
-      if (riderData.emergencyContactName) user.emergencyContactName = String(riderData.emergencyContactName).trim();
-      if (riderData.emergencyRelationship) user.emergencyRelationship = String(riderData.emergencyRelationship).trim();
-      if (riderData.emergencyContactPhone) {
-        const emergencyPhone = String(riderData.emergencyContactPhone).replace(/[^\d]/g, '').slice(-10);
-        if (emergencyPhone) {
-          user.emergencyContactPhone = `+91${emergencyPhone}`;
-        }
-      }
-      if (riderData.vehicleType) user.vehicleType = riderData.vehicleType;
-      if (riderData.vehicleName) user.vehicleName = riderData.vehicleName;
-      if (riderData.vehicleNumber) user.vehicleNumber = riderData.vehicleNumber;
-      if (riderData.accountHolderName || riderData.accountNumber || riderData.ifscCode || riderData.bankName) {
-        user.bankDetails = {
-          accountHolderName: riderData.accountHolderName || '',
-          accountNumber: riderData.accountNumber || '',
-          ifscCode: riderData.ifscCode || '',
-          bankName: riderData.bankName || ''
-        };
-      }
-      // Generate rider ID
-      if (!user.riderId) {
-        user.riderId = 'RIDER' + Date.now().toString().slice(-6);
-      }
-      // Mark profile as complete if all required fields are present
-      user.isProfileComplete = !!(user.name && user.email && user.vehicleType && user.vehicleNumber);
-    }
-
-    // Clear OTP
-    user.otp = undefined;
-    user.otpExpires = undefined;
-    await user.save({ validateBeforeSave: false });
-
-    // Generate token for both new and existing users
-    // New users can login without password initially
-    const token = signToken(user._id);
-    user.password = undefined;
-
-    let restaurant = null;
-
-    // Return user with their actual role from database
-    const isProfileComplete = !!user.isProfileComplete;
-    const userPayload = {
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      isProfileComplete,
-      role: user.role,
-      walletBalance: user.walletBalance,
-      savedAddresses: user.savedAddresses,
-      // Include rider-specific fields
-      ...(user.role === 'rider' && {
-        riderId: user.riderId,
-        vehicleType: user.vehicleType,
-        vehicleName: user.vehicleName,
-        vehicleNumber: user.vehicleNumber,
-        vehicleBrand: user.vehicleBrand || '',
-        vehicleModel: user.vehicleModel || '',
-        currentRating: user.currentRating,
-        isOnline: user.isOnline,
-        bankDetails: user.bankDetails,
-        avatar: user.avatar || user.profilePhoto || '',
-        kycStatus: user.kycStatus || 'pending',
-        kycDisplayStatus: getKycDisplayStatus(user.kycStatus),
-      })
-    };
-
-    return res.status(200).json({
-      status: 'success',
-      success: true,
-      isNewUser,
-      isProfileComplete,
-      routeHint: isProfileComplete ? '/(tabs)' : '/signup',
-      token,
-      user: userPayload,
-      data: {
-        user: userPayload,
-        isNewUser,
-        isProfileComplete,
-        routeHint: isProfileComplete ? '/(tabs)' : '/signup',
-      },
-      ...(restaurant && {
-        restaurant: {
-          _id: restaurant._id,
-          name: restaurant.name,
-          status: restaurant.status,
-          isEnabled: restaurant.isEnabled,
-          message: 'Restaurant created. Please complete your profile and wait for admin approval.'
-        }
-      })
-    });
-  } catch (error) {
-    res.status(400).json({
-      status: 'error',
-      message: error.message,
-    });
-  }
-};
-
-// Set Password (for new users after OTP verification - supports both email and phone)
-/**
- * Sets the signed-in account's password.
- *
- * This took an email or phone number and a new password, found whoever owned
- * that address, set their password to it and handed back a session token — no
- * OTP, no current password, no session of any kind. Anyone who knew a
- * customer's email address could take over their account, and be signed into
- * it on the same request.
- *
- * It now changes the password of whoever is actually signed in. The two real
- * ways to get a new password are untouched: `/auth/reset-password`, which
- * checks a one-time code, and `/auth/invite/set-password`, which checks a
- * signed invitation token. Someone who has just verified an OTP already holds
- * a session, so that route still reaches this.
- */
-export const setPassword = async (req, res) => {
-  try {
-    const { password } = req.body;
-
-    if (!password) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Please provide a new password',
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Password must be at least 6 characters',
-      });
-    }
-
-    // Whoever is signed in — never an account named in the request body.
-    const user = await User.findById(req.user.id).select('+password');
-
-    if (!user) {
-      return res.status(404).json({ status: 'error', message: 'Account not found' });
-    }
-
-    user.password = password;
-    await user.save();
-
-    // Generate JWT token
-    const token = signToken(user._id);
-    user.password = undefined;
-
-    res.status(200).json({
-      status: 'success',
-      token,
-      data: {
-        user,
-      },
-    });
-  } catch (error) {
-    res.status(400).json({
-      status: 'error',
-      message: error.message,
-    });
-  }
-};
-
-// Forgot Password - Step 1: send OTP to email
-/**
- * Finish signing up.
- *
- * POST /auth/verify-account { emailOrPhone, otp }
- *
- * The session starts here rather than at registration: this is the first point
- * at which the contact details have been shown to belong to whoever typed them.
- */
-export const verifyAccount = async (req, res) => {
-  try {
-    const { emailOrPhone, email, phone, otp } = req.body ?? {};
-    const identifier = readIdentifier(emailOrPhone ?? email ?? phone);
-    if (!identifier.kind || !otp) {
-      return res.status(400).json({
-        status: 'error',
-        message: identifier.reason || 'Enter the code we sent you.',
-      });
-    }
-
-    const user = await User.findOne(identifierQuery(identifier)).select('+otp +otpExpires');
-    if (!user) {
-      return res.status(400).json({ status: 'error', message: 'That code is not right.' });
-    }
-
-    // Already done — say so rather than failing on a code that has been cleared.
-    if (user.accountVerified !== false) {
-      return res.json({
-        status: 'success',
-        message: 'This account is already verified. Sign in.',
-        alreadyVerified: true,
-      });
-    }
-
-    if (!user.otp || !user.otpExpires || new Date() > user.otpExpires) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'That code has expired. Ask for a new one.',
-      });
-    }
-
-    if (String(user.otp) !== String(otp).trim()) {
-      return res.status(400).json({ status: 'error', message: 'That code is not right.' });
-    }
-
-    user.accountVerified = true;
-    user.otp = undefined;
-    user.otpExpires = undefined;
-    await user.save({ validateBeforeSave: false });
-
-    res.json({
-      status: 'success',
-      message: 'Account verified.',
-      token: signToken(user._id),
-      data: {
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          role: user.role,
-          walletBalance: user.walletBalance,
-          savedAddresses: user.savedAddresses,
-        },
-      },
-    });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
-  }
-};
-
-/**
- * Another signup code, for one that expired or never arrived.
- * POST /auth/resend-verification { emailOrPhone }
- */
-export const resendVerification = async (req, res) => {
-  try {
-    const { emailOrPhone, email, phone } = req.body ?? {};
-    const identifier = readIdentifier(emailOrPhone ?? email ?? phone);
-    if (!identifier.kind) {
-      return res.status(400).json({ status: 'error', message: identifier.reason });
-    }
-
-    const user = await User.findOne(identifierQuery(identifier)).select('+otp +otpExpires');
-    // Same answer whether or not the account exists, as everywhere else.
-    if (!user || user.accountVerified !== false) {
-      return res.json({
-        status: 'success',
-        message: 'If that account is waiting to be verified, a new code has been sent.',
-      });
-    }
-
-    const otp = generateOTP();
-    user.otp = otp;
-    user.otpExpires = new Date(Date.now() + SIGNUP_OTP_TTL_MS);
-    await user.save({ validateBeforeSave: false });
-    const delivery = await deliverSignupCode(user, otp);
-
-    res.json({
-      status: 'success',
-      channel: delivery.channel,
-      message: delivery.sent
-        ? 'A new code is on its way.'
-        : 'Messaging is not configured on this server, so the code is shown here instead.',
-      ...(delivery.devOtp ? { devOtp: delivery.devOtp } : {}),
-    });
-  } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
   }
 };
 

@@ -13,7 +13,6 @@ import {
   ApiError,
   api,
   loadToken,
-  login as apiLogin,
   sendOtp as apiSendOtp,
   verifyOtp as apiVerifyOtp,
   logout as apiLogout,
@@ -300,11 +299,22 @@ interface StoreValue {
   /** The initial session check has finished — render the app or the login. */
   authReady: boolean;
   session: SessionUser | null;
-  signIn: (email: string, password: string) => Promise<void>;
-  /** Asks the server to send a one-time code to an email or mobile number. */
-  requestOtp: (emailOrPhone: string) => Promise<void>;
-  /** Exchanges that code for a session. */
-  signInWithOtp: (emailOrPhone: string, otp: string) => Promise<void>;
+  /** Asks the server to text a one-time code to a mobile number. */
+  requestOtp: (phone: string) => Promise<{ devOtp?: string; resendAfterSeconds?: number }>;
+  /**
+   * Checks the code. A number with a vendor account is signed in ("signed-in");
+   * one without comes back as "new", with the number held as verified until the
+   * sign-up wizard has what it needs.
+   */
+  verifyOtp: (phone: string, otp: string) => Promise<"signed-in" | "new">;
+  /**
+   * The number that has just been verified and has no account yet, with the
+   * proof the server issued for it. Held in memory only, like the sign-up form
+   * it belongs to.
+   */
+  pendingSignup: { phone: string; phoneProof: string } | null;
+  /** Gives up on signing up, so the next attempt starts from the number again. */
+  cancelSignUp: () => void;
   signOut: () => Promise<void>;
 
   loading: boolean;
@@ -570,19 +580,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     );
   }, [orders, session]);
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const user = await apiLogin(email, password);
-    setSession(user);
+  const [pendingSignup, setPendingSignup] = useState<{ phone: string; phoneProof: string } | null>(
+    null
+  );
+
+  const requestOtp = useCallback((phone: string) => apiSendOtp(phone), []);
+
+  const verifyOtp = useCallback(async (phone: string, otp: string) => {
+    const result = await apiVerifyOtp(phone, otp);
+    if (result.isNewUser) {
+      setPendingSignup({ phone: result.phone, phoneProof: result.phoneProof });
+      return "new" as const;
+    }
+    setPendingSignup(null);
+    setSession(result.user);
+    return "signed-in" as const;
   }, []);
 
-  const requestOtp = useCallback(async (emailOrPhone: string) => {
-    await apiSendOtp(emailOrPhone);
-  }, []);
-
-  const signInWithOtp = useCallback(async (emailOrPhone: string, otp: string) => {
-    const user = await apiVerifyOtp(emailOrPhone, otp);
-    setSession(user);
-  }, []);
+  const cancelSignUp = useCallback(() => setPendingSignup(null), []);
 
   /*
    * Tell the server where to send this vendor's notifications.
@@ -822,9 +837,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       authReady,
       session,
-      signIn,
       requestOtp,
-      signInWithOtp,
+      verifyOtp,
+      pendingSignup,
+      cancelSignUp,
       signOut,
       loading,
       error,
@@ -849,9 +865,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [
       authReady,
       session,
-      signIn,
       requestOtp,
-      signInWithOtp,
+      verifyOtp,
+      pendingSignup,
+      cancelSignUp,
       signOut,
       loading,
       error,

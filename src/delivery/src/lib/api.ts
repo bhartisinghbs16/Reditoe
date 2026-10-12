@@ -208,45 +208,15 @@ export interface LoginResult {
   };
 }
 
-/** Riders are Users with `role: 'rider'`; the shared login issues the JWT. */
-export async function login(email: string, password: string): Promise<LoginResult> {
-  const raw = await fetch(`${API_BASE_URL}/auth/login`, {
-    method: "POST",
-    headers: { ...BASE_HEADERS, "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  }).catch((cause) => {
-    throw new ApiError(
-      `Could not reach the server at ${API_BASE_URL}. Is the backend running?`,
-      0,
-      cause
-    );
-  });
-
-  const payload = await raw.json().catch(() => null);
-
-  if (!raw.ok || payload?.status !== "success") {
-    throw new ApiError(payload?.message || "Incorrect email or password", raw.status, payload);
-  }
-  if (payload?.data?.user?.role !== "rider") {
-    throw new ApiError("This account is not a delivery partner.", 403, payload);
-  }
-
-  await setToken(payload.token);
-  return { token: payload.token, user: payload.data.user };
-}
-
 /**
- * Asks for a one-time code.
- *
- * The role is sent so the server knows which door was knocked on: a number
- * that is not a partner here is told so, rather than being quietly signed up
- * as one.
+ * Sign-in is by mobile number and a one-time code, and nothing else. There is no
+ * password: a rider on the road loses one more often than they lose their phone.
  */
-export async function sendOtp(emailOrPhone: string): Promise<{ message?: string }> {
-  const raw = await fetch(`${API_BASE_URL}/auth/send-otp`, {
+const authCall = async (path: string, body: Record<string, unknown>) => {
+  const raw = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     headers: { ...BASE_HEADERS, "Content-Type": "application/json" },
-    body: JSON.stringify({ emailOrPhone, role: "rider" }),
+    body: JSON.stringify(body),
   }).catch((cause) => {
     throw new ApiError(
       `Could not reach the server at ${API_BASE_URL}. Is the backend running?`,
@@ -255,93 +225,67 @@ export async function sendOtp(emailOrPhone: string): Promise<{ message?: string 
     );
   });
 
+  // A proxy's error page is not JSON; say so plainly rather than "Unexpected token <".
   const payload = await raw.json().catch(() => null);
   if (!raw.ok || payload?.success === false || payload?.status === "error") {
-    throw new ApiError(payload?.message || "Could not send the code", raw.status, payload);
-  }
-  return payload ?? {};
-}
-
-/**
- * Exchanges the code for a session.
- *
- * `selectedRole` is what stops a customer's code opening the partner app; the
- * server refuses when the account is not a partner, and that check belongs
- * there rather than here where it could simply be skipped.
- */
-export async function verifyOtp(emailOrPhone: string, otp: string): Promise<LoginResult> {
-  const raw = await fetch(`${API_BASE_URL}/auth/verify-otp`, {
-    method: "POST",
-    headers: { ...BASE_HEADERS, "Content-Type": "application/json" },
-    body: JSON.stringify({ emailOrPhone, otp, selectedRole: "rider" }),
-  }).catch((cause) => {
     throw new ApiError(
-      `Could not reach the server at ${API_BASE_URL}. Is the backend running?`,
-      0,
-      cause
-    );
-  });
-
-  const payload = await raw.json().catch(() => null);
-
-  if (!raw.ok || payload?.status === "error" || !payload?.token) {
-    throw new ApiError(payload?.message || "That code didn't work", raw.status, payload);
-  }
-  if (payload?.data?.user?.role !== "rider") {
-    throw new ApiError("This account is not a delivery partner.", 403, payload);
-  }
-
-  await setToken(payload.token);
-  return { token: payload.token, user: payload.data.user };
-}
-
-/**
- * Creates a delivery partner account.
- *
- * Goes through the shared registration with `role: 'rider'` rather than
- * `/rider/register`, which additionally demands vehicle type, number, brand and
- * model and rejects the request without them. Those belong to the verification
- * steps that follow this screen — asking for a vehicle registration number
- * before the account exists would put the longest part of onboarding first.
- */
-export async function register(input: {
-  name: string;
-  email: string;
-  password: string;
-  phone: string;
-  referralCode?: string;
-}): Promise<LoginResult> {
-  const raw = await fetch(`${API_BASE_URL}/auth/register`, {
-    method: "POST",
-    headers: { ...BASE_HEADERS, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: input.name,
-      email: input.email,
-      password: input.password,
-      phone: input.phone,
-      role: "rider",
-      referralCode: input.referralCode || undefined,
-    }),
-  }).catch((cause) => {
-    throw new ApiError(
-      `Could not reach the server at ${API_BASE_URL}. Is the backend running?`,
-      0,
-      cause
-    );
-  });
-
-  const payload = await raw.json().catch(() => null);
-
-  if (!raw.ok || payload?.status !== "success") {
-    throw new ApiError(
-      payload?.message || "Could not create the account",
+      payload?.message || "Something went wrong. Please try again.",
       raw.status,
       payload
     );
   }
+  return payload ?? {};
+};
+
+/**
+ * Asks for a code to be texted to a mobile number.
+ *
+ * The role is sent so the server knows which door was knocked on. It answers the
+ * same way whether or not the number has an account - that is for the person who
+ * proves they hold it to find out - and hands the code back as `devOtp` only
+ * when it has no way to send a text, which is never the case in production.
+ */
+export async function sendOtp(
+  phone: string
+): Promise<{ devOtp?: string; resendAfterSeconds?: number }> {
+  const payload = await authCall("/auth/send-otp", { phone, role: "rider" });
+  return {
+    devOtp: payload.devOtp,
+    resendAfterSeconds: payload.data?.resendAfterSeconds,
+  };
+}
+
+/** What checking a code can come to. */
+export type VerifyResult =
+  /** The number has a partner account: signed in, session stored. */
+  | { isNewUser: false; user: LoginResult["user"] }
+  /** It does not: nothing exists yet, and this proof is what sign-up trades on. */
+  | { isNewUser: true; phone: string; phoneProof: string };
+
+/**
+ * Exchanges the code for a session - or, for a number nobody has registered, a
+ * proof that it was verified.
+ *
+ * The role is what stops a customer's code opening the partner app: the server
+ * refuses when the account is not a partner, and that check belongs there
+ * rather than here where it could simply be skipped.
+ */
+export async function verifyOtp(phone: string, otp: string): Promise<VerifyResult> {
+  const payload = await authCall("/auth/verify-otp", { phone, otp, role: "rider" });
+
+  if (payload.isNewUser) {
+    if (!payload.phoneProof) {
+      throw new ApiError("The server did not confirm that number.", 500, payload);
+    }
+    return { isNewUser: true, phone: payload.phone ?? phone, phoneProof: payload.phoneProof };
+  }
+
+  if (!payload.token || payload.data?.user?.role !== "rider") {
+    throw new ApiError("This account is not a delivery partner.", 403, payload);
+  }
 
   await setToken(payload.token);
-  return { token: payload.token, user: payload.data.user };
+  return { isNewUser: false, user: payload.data.user };
 }
 
 export async function logout() {

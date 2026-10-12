@@ -53,7 +53,6 @@ export default function AccountScreen() {
     { icon: "location-outline" as const, accent: "green" as const, label: "Addresses", detail: "Manage saved delivery addresses", href: "/addresses" },
     { icon: "card-outline" as const, accent: "blue" as const, label: "Payment Methods", detail: "UPI, Cards, Wallets & more", href: "/payments" },
     { icon: "wallet-outline" as const, accent: "purple" as const, label: "Reditoe Wallet", detail: "View balance, transactions & history", href: "/wallet" },
-    { icon: "shield-checkmark-outline" as const, accent: "orange" as const, label: "Security", detail: "Change your password", href: "/security" },
     { icon: "notifications-outline" as const, accent: "amber" as const, label: "Notifications", detail: "Manage your notification preferences", href: "/notifications" },
     { icon: "headset-outline" as const, accent: "teal" as const, label: "Help & Support", detail: "Message our team and track your requests", href: "/support" },
   ];

@@ -3,6 +3,12 @@
     "name": "Reditoe",
     "slug": "reditoe-customer",
     "version": "1.0.16",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/1ebf0e40-2972-4cd0-a64c-6ab56ba5727f"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "reditoe",
@@ -31,6 +37,14 @@
     "plugins": [
       "expo-router",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Reditoe uses your photos so you can choose a profile picture.",
+          "cameraPermission": "Reditoe uses your camera so you can take a profile picture.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#FFFFFF",
@@ -50,9 +64,8 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "4b950395-a60c-4418-933a-66031bec5208"
+        "projectId": "1ebf0e40-2972-4cd0-a64c-6ab56ba5727f"
       }
-    },
-    "owner": "pillai.mk13"
+    }
   }
 }

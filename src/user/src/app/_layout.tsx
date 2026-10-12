@@ -49,7 +49,6 @@ export default function RootLayout() {
             <Stack.Screen name="payments" />
             <Stack.Screen name="refunds" />
             <Stack.Screen name="profile" />
-            <Stack.Screen name="security" />
             <Stack.Screen name="notifications" />
             <Stack.Screen name="about" />
             {/* Reditoe Plus is six screens in the reference, so it is a
@@ -62,6 +61,7 @@ export default function RootLayout() {
             <Stack.Screen name="plus/features" />
             <Stack.Screen name="verify" />
             <Stack.Screen name="signin" options={{ animation: "slide_from_bottom" }} />
+            <Stack.Screen name="signup" />
           </Stack>
         </StoreProvider>
       </SafeAreaProvider>
@@ -79,11 +79,11 @@ export default function RootLayout() {
  *
  * It waits for `authReady` — routing on `signedIn` alone would bounce a
  * returning customer out to sign-in for the moment before their stored token
- * is checked. `/signin` is exempt for the obvious reason, and so is
- * `/set-password`, which is reached from an email by someone who by definition
- * cannot sign in yet.
+ * is checked. `/signin` is exempt for the obvious reason, and so is `/signup`:
+ * a number that has just been verified and has no account yet is sent there to
+ * finish, and it cannot have a session until it has.
  */
-const PUBLIC_ROUTES = ["/signin", "/set-password"];
+const PUBLIC_ROUTES = ["/signin", "/signup"];
 
 function AuthGate() {
   const { authReady, signedIn } = useStore();

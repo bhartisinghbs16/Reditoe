@@ -16,11 +16,20 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 const KEY = "reditoe.rider.application";
 
 export interface RiderDraft {
-  /* Step 1 — credentials */
+  /* Step 1 — who they are */
   name: string;
   email: string;
   phone: string;
-  password: string;
+  /**
+   * The server's proof that the phone number was verified by a one-time code -
+   * the code that signed them in and found nobody there. Registration will not
+   * accept the number without it.
+   *
+   * Kept with the draft rather than in memory: the application is five screens
+   * long and gets interrupted, and the proof stays good for as long as the
+   * draft is likely to.
+   */
+  phoneProof: string;
   referralCode?: string;
 
   /* Step 2 — personal */
@@ -74,7 +83,7 @@ export const EMPTY_DRAFT: RiderDraft = {
   name: "",
   email: "",
   phone: "",
-  password: "",
+  phoneProof: "",
   dateOfBirth: "",
   gender: "",
   emergencyContactName: "",
@@ -112,7 +121,11 @@ export async function loadDraft(): Promise<RiderDraft | null> {
     if (!raw) return null;
     // Merged over the empty draft so a draft written by an older build, before
     // a field existed, still opens instead of arriving with holes in it.
-    return { ...EMPTY_DRAFT, ...(JSON.parse(raw) as Partial<RiderDraft>) };
+    const saved = JSON.parse(raw) as Partial<RiderDraft> & { password?: string };
+    // Drafts from before sign-in became code-only carry the password the
+    // partner chose. There is nothing to use it for, so it is not kept.
+    delete saved.password;
+    return { ...EMPTY_DRAFT, ...saved };
   } catch {
     return null;
   }

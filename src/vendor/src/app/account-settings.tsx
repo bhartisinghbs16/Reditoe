@@ -30,7 +30,7 @@ export default function AccountSettings() {
   const { session, vendor, signOut } = useStore();
 
   const confirmSignOut = () =>
-    Alert.alert("Sign out?", "You will need your password to sign back in.", [
+    Alert.alert("Sign out?", "You will need your mobile number and a one-time code to sign back in.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Sign out",

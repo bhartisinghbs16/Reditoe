@@ -4,12 +4,11 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import {
   ApiError,
   loadToken,
-  login as apiLogin,
   sendOtp as apiSendOtp,
   verifyOtp as apiVerifyOtp,
   logout as apiLogout,
-  register as apiRegister,
   request,
+  type VerifyResult,
 } from "@/lib/api";
 import { registerForPush, unregisterForPush } from "@/lib/push";
 
@@ -34,18 +33,14 @@ export interface SessionUser {
 interface SessionValue {
   user: SessionUser | null;
   restoring: boolean;
-  signIn: (email: string, password: string) => Promise<void>;
-  /** Asks the server to send a one-time code to an email or mobile number. */
-  requestOtp: (emailOrPhone: string) => Promise<void>;
-  /** Exchanges that code for a session. */
-  signInWithOtp: (emailOrPhone: string, otp: string) => Promise<void>;
-  signUp: (input: {
-    name: string;
-    email: string;
-    password: string;
-    phone: string;
-    referralCode?: string;
-  }) => Promise<void>;
+  /** Asks the server to text a one-time code to a mobile number. */
+  requestOtp: (phone: string) => Promise<{ devOtp?: string; resendAfterSeconds?: number }>;
+  /**
+   * Checks the code. A number with a partner account is signed in, and the
+   * session is set here; one without comes back as a proof for the sign-up
+   * screen, and no session exists until the application has been submitted.
+   */
+  verifyOtp: (phone: string, otp: string) => Promise<VerifyResult>;
   signOut: () => Promise<void>;
 }
 
@@ -94,45 +89,22 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const { user: account } = await apiLogin(email, password);
-    setUser({
-      id: account.id,
-      name: account.name,
-      email: account.email,
-      phone: account.phone,
-      riderId: account.riderId,
-      isOnline: account.isOnline,
-    });
-  }, []);
+  const requestOtp = useCallback((phone: string) => apiSendOtp(phone), []);
 
-  const requestOtp = useCallback(async (emailOrPhone: string) => {
-    await apiSendOtp(emailOrPhone);
-  }, []);
-
-  // The same shaping as signIn: one place decides what a session looks like.
-  const signInWithOtp = useCallback(async (emailOrPhone: string, otp: string) => {
-    const { user: account } = await apiVerifyOtp(emailOrPhone, otp);
-    setUser({
-      id: account.id,
-      name: account.name,
-      email: account.email,
-      phone: account.phone,
-      riderId: account.riderId,
-      isOnline: account.isOnline,
-    });
-  }, []);
-
-  const signUp = useCallback<SessionValue["signUp"]>(async (input) => {
-    const { user: account } = await apiRegister(input);
-    setUser({
-      id: account.id,
-      name: account.name,
-      email: account.email,
-      phone: account.phone,
-      riderId: account.riderId,
-      isOnline: account.isOnline,
-    });
+  const verifyOtp = useCallback(async (phone: string, otp: string) => {
+    const result = await apiVerifyOtp(phone, otp);
+    if (!result.isNewUser) {
+      const account = result.user;
+      setUser({
+        id: account.id,
+        name: account.name,
+        email: account.email,
+        phone: account.phone,
+        riderId: account.riderId,
+        isOnline: account.isOnline,
+      });
+    }
+    return result;
   }, []);
 
   const signOut = useCallback(async () => {
@@ -156,8 +128,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   const value = useMemo<SessionValue>(
-    () => ({ user, restoring, signIn, requestOtp, signInWithOtp, signUp, signOut }),
-    [user, restoring, signIn, requestOtp, signInWithOtp, signUp, signOut]
+    () => ({ user, restoring, requestOtp, verifyOtp, signOut }),
+    [user, restoring, requestOtp, verifyOtp, signOut]
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

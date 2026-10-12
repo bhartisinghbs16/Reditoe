@@ -33,13 +33,33 @@ import type { ApiOrder, DeliveryAddress, RefundRequest } from "@/lib/api";
 import { useHere, type Here } from "@/lib/here";
 import { registerForPush, unregisterForPush } from "@/lib/push";
 import {
-  API_BASE,
+  type ProfilePhoto,
   api,
   getAuthToken,
   hydrateAuthToken,
   loadCatalogue,
   setAuthToken,
 } from "@/lib/api";
+import { humanName } from "@/lib/format";
+
+/**
+ * The signed-in account as the screens see it.
+ *
+ * The name goes through humanName, so an id or key that ended up in the
+ * account's name field is dropped here once instead of being filtered at every
+ * place a name is drawn. Nothing else from the API response is kept: the
+ * server's address, tokens and ids stay in this file and in api.ts.
+ */
+function toAuthUser(user?: { name?: string; email?: string; phone?: string } | null) {
+  return {
+    name: humanName(user?.name),
+    email: user?.email ?? "",
+    phone: user?.phone ?? "",
+  };
+}
+
+/** What a customer without a usable name is called on screen. */
+const FALLBACK_NAME = "Customer";
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 
@@ -81,42 +101,71 @@ export interface PlacedOrder {
   paymentDetail: string;
 }
 
+/**
+ * One bill. Every line is to the paisa and the lines add up exactly:
+ *
+ *   toPay = itemTotal + packaging + delivery + platformFee + taxes + tip
+ *           - discount - walletUsed
+ *
+ * When the server has priced it these are the server's own figures, so the
+ * cart, the payment screen, the order screen and the admin console all print
+ * the same numbers.
+ */
 export interface Totals {
   itemTotal: number;
   packaging: number;
   delivery: number;
   platformFee: number;
+  /** GST on the food, and on the delivery and platform fees. */
   taxes: number;
+  tip?: number;
+  /** Coupon discount, taken off the item total. */
   discount: number;
-  /** Coupon plus any delivery fee waived — what the "You saved" line quotes. */
+  /** The coupon the discount belongs to, if one applied. */
+  couponCode?: string;
+  /** Why the coupon the customer chose is not taking anything off, if so. */
+  couponError?: string | null;
+  /** Reditoe Money going towards this order. */
+  walletUsed?: number;
+  /** The most Reditoe Money this bill could take, switched on or not. */
+  walletCap?: number;
+  /** The bill before the coupon and Reditoe Money come off it. */
+  grossTotal?: number;
+  /** What the customer saved - the coupon discount. */
   saved: number;
+  /** The net payable amount. */
   toPay: number;
   distanceKmUsed?: number;
 }
 
 /* ── Pricing ────────────────────────────────────────────────────────────── */
 
-const PLATFORM_FEE = 10;
-const GST_RATE = 0.05;
-/** Statutory charges the reference folds into the "GST & Charges" line. */
-const FIXED_CHARGES = 7;
+/** To the paisa, the way the server rounds every line of a bill. */
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /**
- * One place computes the bill. The cart, payment and order screens all read
- * this, so what the customer is quoted can't drift between screens.
+ * An estimate of the bill, for when the server has not priced it - signed out,
+ * offline, or a moment before its answer arrives. The payment screen never
+ * charges against this: Pay waits for the server's own figures.
+ *
+ * It follows the server's rules so an estimate lands close to the real thing:
+ * the coupon comes off the item total, the platform fee is 2% of it (minimum
+ * 8), and GST is 5% on the food and 18% on the delivery and platform fees.
+ * What it cannot know is the distance, so delivery is the restaurant's flat
+ * fee. It no longer waives delivery above a threshold or for Plus members -
+ * the server charges delivery to everyone, and an estimate promising "FREE"
+ * was a figure nobody was ever billed.
  */
 export function computeTotals(
   lines: CartLine[],
   restaurantId: string | null,
-  offer: Offer | null,
-  plusMember = false
+  offer: Offer | null
 ): Totals {
   const restaurant = restaurantId ? lookupRestaurant(restaurantId) : null;
-  const deliveryFee = restaurant?.deliveryFee ?? 0;
+  const hasItems = lines.length > 0;
 
-  const itemTotal = lines.reduce(
-    (sum, line) => sum + line.unitPrice * line.quantity,
-    0
+  const itemTotal = round2(
+    lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0)
   );
 
   let discount = 0;
@@ -127,28 +176,21 @@ export function computeTotals(
       discount = offer.maxDiscount ? Math.min(raw, offer.maxDiscount) : raw;
     }
   }
+  // Whole rupees, and never more than the food - as the server does it.
+  discount = Math.min(Math.round(discount), Math.round(itemTotal));
 
-  // Free-delivery codes waive the fee rather than discounting the items, and
-  // Plus membership waives it outright.
-  const freeDeliveryCode =
-    offer?.kind === "delivery" && itemTotal >= offer.minOrder;
-  const freeAboveThreshold =
-    restaurant != null && itemTotal >= restaurant.freeDeliveryAbove;
-  const deliveryWaived =
-    itemTotal > 0 && (plusMember || freeDeliveryCode || freeAboveThreshold);
+  const delivery = hasItems ? round2(restaurant?.deliveryFee ?? 0) : 0;
+  const packaging = hasItems ? round2(restaurant?.packagingFee ?? 0) : 0;
+  const platformFee = hasItems ? round2(Math.max(itemTotal * 0.02, 8)) : 0;
+  const taxes = hasItems
+    ? round2(
+        round2(itemTotal * 0.05) +
+          round2(delivery * 0.18) +
+          round2(platformFee * 0.18)
+      )
+    : 0;
 
-  const delivery = itemTotal === 0 || deliveryWaived ? 0 : deliveryFee;
-  const packaging = lines.length > 0 ? (restaurant?.packagingFee ?? 0) : 0;
-  const platformFee = lines.length > 0 ? PLATFORM_FEE : 0;
-  const taxes =
-    lines.length > 0
-      ? Math.round((itemTotal - discount) * GST_RATE) + FIXED_CHARGES
-      : 0;
-
-  const toPay = Math.max(
-    0,
-    Math.round(itemTotal + packaging + delivery + platformFee + taxes - discount)
-  );
+  const grossTotal = round2(itemTotal + packaging + delivery + platformFee + taxes);
 
   return {
     itemTotal,
@@ -156,8 +198,37 @@ export function computeTotals(
     delivery,
     platformFee,
     taxes,
-    discount: Math.round(discount),
-    saved: Math.round(discount) + (deliveryWaived ? deliveryFee : 0),
+    discount,
+    couponCode: discount > 0 ? offer?.code : undefined,
+    walletUsed: 0,
+    grossTotal,
+    saved: discount,
+    toPay: Math.max(0, round2(grossTotal - discount)),
+  };
+}
+
+/**
+ * An order's bill as the server stored it.
+ *
+ * `gstAndPackaging` is the whole tax charge - GST on the food plus GST on the
+ * delivery and platform fees. Packaging is its own line, not part of it.
+ */
+function totalsFromApiOrder(raw: ApiOrder, fallbackItemTotal = 0): Totals {
+  const discount = Number(raw.discount ?? 0);
+  const walletUsed = Number(raw.walletUsed ?? 0);
+  const toPay = Number(raw.total ?? 0);
+  return {
+    itemTotal: Number(raw.subtotal ?? fallbackItemTotal),
+    packaging: Number(raw.packagingFee ?? 0),
+    delivery: Number(raw.deliveryFee ?? 0),
+    platformFee: Number(raw.platformFee ?? 0),
+    taxes: Number(raw.gstAndPackaging ?? raw.tax ?? 0),
+    tip: Number(raw.tip ?? 0),
+    discount,
+    couponCode: raw.couponCode || undefined,
+    walletUsed,
+    grossTotal: round2(toPay + discount + walletUsed),
+    saved: discount,
     toPay,
   };
 }
@@ -191,28 +262,38 @@ interface StoreValue {
   codEnabled: boolean;
   authError: string | null;
   signingIn: boolean;
-  /** Email address or mobile number, plus the password. */
-  signIn: (emailOrPhone: string, password: string) => Promise<boolean>;
   /**
-   * Creates the account. Resolves with the code step rather than a session:
-   * the server withholds the token until the account is verified.
+   * Texts a sign-in code to a mobile number. There is no password: the number
+   * and the code are the only way in. Resolves with the code when the server
+   * could not deliver it (never in production), so the flow can still finish.
    */
-  signUp: (
-    name: string,
-    email: string,
-    password: string,
-    phone: string,
-    referralCode?: string
-  ) => Promise<{ ok: boolean; code?: string; channel?: string }>;
-  verifyAccount: (emailOrPhone: string, otp: string) => Promise<boolean>;
-  resendVerification: (emailOrPhone: string) => Promise<{ ok: boolean; code?: string }>;
+  requestOtp: (
+    phone: string
+  ) => Promise<{ ok: boolean; code?: string; resendAfterSeconds?: number }>;
+  /**
+   * Checks the code. A number with an account is signed in ("signed-in"); one
+   * without is sent to sign up ("new"), with the number held as verified until
+   * the sign-up screen has what it needs.
+   */
+  verifyOtp: (phone: string, otp: string) => Promise<"signed-in" | "new" | "failed">;
+  /**
+   * The number that has just been verified and has no account yet, or null.
+   * Held in memory only: it is a proof the server issued, good for one account,
+   * and there is nothing to be gained by it surviving a restart.
+   */
+  pendingSignup: { phone: string } | null;
+  /** Gives up on signing up, so the next attempt starts from the number again. */
+  cancelSignUp: () => void;
+  /** Creates the account for the verified number, and signs it in. */
+  completeSignUp: (input: {
+    name: string;
+    email: string;
+    /** ISO date, YYYY-MM-DD. */
+    dateOfBirth: string;
+    photo: ProfilePhoto;
+    referralCode?: string;
+  }) => Promise<boolean>;
   signOut: () => void;
-  /** Sends a one-time code; resolves with it when the server could not deliver it. */
-  requestOtp: (emailOrPhone: string) => Promise<{ ok: boolean; code?: string }>;
-  /** Verifies a code and signs in, creating the account if it is new. */
-  signInWithOtp: (emailOrPhone: string, otp: string) => Promise<boolean>;
-  requestPasswordReset: (emailOrPhone: string) => Promise<{ ok: boolean; code?: string; channel?: string }>;
-  resetPassword: (emailOrPhone: string, otp: string, password: string) => Promise<boolean>;
 
   /** Populated once signed in; null while anonymous. */
   wallet: {
@@ -257,6 +338,25 @@ interface StoreValue {
   setQuantity: (key: string, quantity: number) => void;
   clearCart: () => void;
   applyOffer: (offer: Offer | null) => void;
+  /**
+   * Whether the customer wants Reditoe Money put towards this order. It lives
+   * here, not on the payment screen, because it changes the bill - the server
+   * prices it - and the bill is read from several screens.
+   */
+  useWallet: boolean;
+  setUseWallet: (on: boolean) => void;
+  /**
+   * Whether `totals` is the server's own price for the basket as it stands.
+   *
+   * 'ready' - it is; 'pending' - a new quote is on its way, so the figures
+   * shown are about to change; 'failed' - the server could not price it, and
+   * the figures are an estimate; 'idle' - nothing to price, or signed out.
+   * Payment only proceeds on 'ready': the amount charged is the server's, and
+   * a customer should never pay a number they were not shown.
+   */
+  billStatus: "idle" | "pending" | "ready" | "failed";
+  /** Asks the server to price the basket again. */
+  refreshBill: () => void;
 
   addresses: typeof seedAddresses;
   selectedAddressId: string;
@@ -307,13 +407,19 @@ interface StoreValue {
     options?: { deferCommit?: boolean; useWallet?: boolean }
   ) => Promise<PlacedOrder>;
   commitPlacedOrder: (order: PlacedOrder) => void;
+  /**
+   * Records a status the server has just reported for an order, so every
+   * screen reading this list agrees with the one that heard it. The tracking
+   * screen polls far more often than the list does, and uses this to hand
+   * what it learns to the rest of the app.
+   */
+  syncOrderStatus: (orderId: string, status: string) => void;
 
   customer: typeof seedCustomer;
   plusMember: boolean;
 
   /** Where the catalogue on screen came from, and why if the API was skipped. */
   dataSource: CatalogueSource;
-  apiBase: string;
   apiError: string | null;
   reloadCatalogue: () => void;
 
@@ -421,16 +527,7 @@ function toPlacedOrder(raw: ApiOrder): PlacedOrder {
     canRequestRefund: raw.canRequestRefund,
     placedAt,
     etaAt: new Date(new Date(placedAt).getTime() + etaMinutes * 60_000).toISOString(),
-    totals: {
-      itemTotal,
-      packaging: Number(raw.packagingFee ?? 0),
-      delivery: Number(raw.deliveryFee ?? 0),
-      platformFee: Number(raw.platformFee ?? 0),
-      taxes: Number(raw.gstAndPackaging ?? raw.tax ?? 0),
-      discount: Number(raw.discount ?? 0),
-      saved: Number(raw.discount ?? 0),
-      toPay: Number(raw.total ?? 0),
-    },
+    totals: totalsFromApiOrder(raw, itemTotal),
     addressId: "",
     paymentMethod: raw.paymentMethod ?? "",
     paymentDetail: raw.paymentMethod ?? "",
@@ -466,6 +563,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   >([]);
   const [categoryRestaurants, setCategoryRestaurants] = useState<Restaurant[] | null>(null);
   const [appliedOffer, setAppliedOffer] = useState<Offer | null>(null);
+  /** Whether Reditoe Money is to be put towards the order. See StoreValue. */
+  const [useWallet, setUseWallet] = useState(false);
   const [selectedAddressId, setSelectedAddressId] = useState(seedAddresses[0].id);
 
   /**
@@ -565,11 +664,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         .then((user) => {
           if (cancelled) return;
           setToken(stored);
-          setAuthUser({
-            name: user?.name ?? "",
-            email: user?.email ?? "",
-            phone: user?.phone ?? "",
-          });
+          setAuthUser(toAuthUser(user));
           setCodEnabled(user?.codEnabled === true);
         })
         .catch(() => {
@@ -588,19 +683,50 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  /** The home posters, refreshed with the catalogue. */
+  /**
+   * The home posters, kept current while the app is open.
+   *
+   * They were read once at launch, so a poster the admin added, changed or
+   * took down never reached a phone that was already open. They are asked for
+   * again when the app returns to the foreground and every half minute while
+   * it is being used - far more often than the catalogue, because the list is
+   * a few small rows and a campaign going live is something the admin watches
+   * for. Polling rather than a socket, for the same reason as the catalogue.
+   *
+   * The list is replaced only when it actually differs, so the carousel is
+   * not rebuilt - and sent back to its first poster - on every poll.
+   */
   useEffect(() => {
     let cancelled = false;
-    api
-      .banners()
-      .then((rows) => {
-        if (!cancelled) setBanners(rows);
-      })
-      .catch(() => {
-        /* the screen falls back to the offers it draws itself */
-      });
+    const POLL_MS = 30 * 1000;
+
+    const pull = () => {
+      api
+        .banners()
+        .then((rows) => {
+          if (cancelled) return;
+          setBanners((current) =>
+            JSON.stringify(current) === JSON.stringify(rows) ? current : rows
+          );
+        })
+        .catch(() => {
+          /* keep what is showing; with nothing, the screen draws its own offers */
+        });
+    };
+
+    pull();
+
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (next === "active") pull();
+    });
+    const timer = setInterval(() => {
+      if (AppState.currentState === "active") pull();
+    }, POLL_MS);
+
     return () => {
       cancelled = true;
+      subscription.remove();
+      clearInterval(timer);
     };
   }, []);
 
@@ -649,16 +775,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [selectedCategory, catalogueCoordinates?.latitude, catalogueCoordinates?.longitude]);
 
   /**
-   * Pull the catalogue from the API once on boot. The sample data stays on
-   * screen if the backend is unreachable or empty, so the app is never blank
-   * because a dev server is down.
+   * Whether a real list of restaurants has ever arrived from the server, and the
+   * dishes that came with it. A refresh that fails consults these before it
+   * touches what is on screen.
+   */
+  const hasLiveCatalogue = React.useRef(false);
+  const dishesOnScreen = React.useRef<Dish[]>([]);
+  dishesOnScreen.current = catalogue.dishes;
+
+  /**
+   * Pull the catalogue from the API once on boot, and again as it goes stale.
+   *
+   * A failure here is a problem with one request, not a verdict on the
+   * restaurants. The catalogue refreshes when the app comes back to the
+   * foreground, every two minutes, and whenever the customer moves; wiping the
+   * list on any one of those failing meant a single dropped connection, a 429,
+   * or a server restart emptied the home screen under somebody who was
+   * scrolling it. What is on screen now stays until the server actually says
+   * something different.
    */
   useEffect(() => {
     let cancelled = false;
 
-    loadCatalogue(catalogueCoordinates)
+    loadCatalogue(catalogueCoordinates, dishesOnScreen.current)
       .then(({ restaurants, dishes }) => {
         if (cancelled) return;
+        hasLiveCatalogue.current = true;
         if (restaurants.length === 0) {
           // An empty live result is a valid serviceability result. Never fall
           // back to seeded restaurants here: that would reintroduce hotels in
@@ -710,13 +852,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       .catch((error: unknown) => {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : String(error);
-        // Never show bundled/sample restaurants when the live catalogue is
-        // unavailable: doing so can expose restaurants outside the customer's
-        // 10 km service area.
+        setApiError(message);
+        // A refresh that failed leaves the last good list where it is.
+        if (hasLiveCatalogue.current) return;
+        // Nothing real has ever loaded. Never show bundled/sample restaurants
+        // in its place: doing so can expose restaurants outside the customer's
+        // 10 km service area. The home screen says it could not load, with a
+        // way to try again, rather than claiming there is nothing nearby.
         setCatalogueState({ restaurants: [], dishes: [], combos: [] });
         setCatalogue({ restaurants: [], dishes: [] });
         setDataSource("api");
-        setApiError(message);
       });
 
     // A stored token means the customer was already signed in before this load.
@@ -906,6 +1051,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setLines([]);
     setAppliedOffer(null);
     setOrderNotes("");
+    setUseWallet(false);
   }, []);
 
   const toggleFavourite = useCallback((restaurantId: string) => {
@@ -928,6 +1074,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
 
     await Promise.all([
+      // The name and contact details, so an edit on the profile screen - or
+      // one made by support - shows up without signing out and back in.
+      settle(api.me(), (user) => setAuthUser(toAuthUser(user))),
       settle(api.wallet(), (res) => {
         setWallet({
           balance: res.data.wallet.balance,
@@ -966,11 +1115,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const user = result.data?.user as
         | { name?: string; email?: string; phone?: string; codEnabled?: boolean }
         | undefined;
-      setAuthUser({
-        name: user?.name ?? "",
-        email: user?.email ?? "",
-        phone: user?.phone ?? "",
-      });
+      setAuthUser(toAuthUser(user));
       setCodEnabled(user?.codEnabled === true);
       setAuthError(null);
       await loadAuthedData();
@@ -978,79 +1123,26 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [loadAuthedData]
   );
 
-  const signIn = useCallback<StoreValue["signIn"]>(
-    async (email, password) => {
-      setSigningIn(true);
-      setAuthError(null);
-      try {
-        await afterAuth(await api.login(email, password));
-        return true;
-      } catch (error) {
-        setAuthError(error instanceof Error ? error.message : "Sign in failed");
-        return false;
-      } finally {
-        setSigningIn(false);
-      }
-    },
-    [afterAuth]
-  );
+  /**
+   * The verified number waiting for a sign-up, with the proof the server issued
+   * for it. The proof stays in this ref rather than in state or in the route:
+   * nothing renders from it, and a route parameter would put it in the address
+   * bar and the history of the web build.
+   */
+  const signupProof = React.useRef<{ phone: string; proof: string } | null>(null);
+  const [pendingSignup, setPendingSignup] = useState<{ phone: string } | null>(null);
 
-  const signUp = useCallback<StoreValue["signUp"]>(
-    async (name, email, password, phone, referralCode) => {
-      setSigningIn(true);
-      setAuthError(null);
-      try {
-        const res = await api.register(name, email, password, phone, referralCode);
-        // No session yet — the caller moves to the code step.
-        return { ok: true, code: res?.devOtp, channel: res?.channel };
-      } catch (error) {
-        setAuthError(error instanceof Error ? error.message : "Sign up failed");
-        return { ok: false };
-      } finally {
-        setSigningIn(false);
-      }
-    },
-    []
-  );
-
-  const verifyAccount = useCallback<StoreValue["verifyAccount"]>(
-    async (emailOrPhone, otp) => {
-      setSigningIn(true);
-      setAuthError(null);
-      try {
-        await afterAuth(await api.verifyAccount(emailOrPhone.trim(), otp.trim()));
-        return true;
-      } catch (error) {
-        setAuthError(error instanceof Error ? error.message : "That code was not accepted");
-        return false;
-      } finally {
-        setSigningIn(false);
-      }
-    },
-    [afterAuth]
-  );
-
-  const resendVerification = useCallback<StoreValue["resendVerification"]>(
-    async (emailOrPhone) => {
-      setAuthError(null);
-      try {
-        const res = await api.resendVerification(emailOrPhone.trim());
-        return { ok: true, code: res?.devOtp };
-      } catch (error) {
-        setAuthError(error instanceof Error ? error.message : "Could not send a new code");
-        return { ok: false };
-      }
-    },
-    []
-  );
-
-  const requestOtp = useCallback<StoreValue["requestOtp"]>(async (emailOrPhone) => {
+  const requestOtp = useCallback<StoreValue["requestOtp"]>(async (phone) => {
     setAuthError(null);
     setSigningIn(true);
     try {
-      const res = await api.sendOtp(emailOrPhone.trim());
+      const res = await api.sendOtp(phone.trim());
       // Present only when the server had no way to send it.
-      return { ok: true, code: res?.otp ?? res?.data?.debugOtp };
+      return {
+        ok: true,
+        code: res?.devOtp,
+        resendAfterSeconds: res?.data?.resendAfterSeconds,
+      };
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : "Could not send the code");
       return { ok: false };
@@ -1059,16 +1151,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const signInWithOtp = useCallback<StoreValue["signInWithOtp"]>(
-    async (emailOrPhone, otp) => {
+  const verifyOtp = useCallback<StoreValue["verifyOtp"]>(
+    async (phone, otp) => {
       setAuthError(null);
       setSigningIn(true);
       try {
-        await afterAuth(await api.verifyOtp(emailOrPhone.trim(), otp.trim()));
-        return true;
+        const res = await api.verifyOtp(phone.trim(), otp.trim());
+        if (res.isNewUser) {
+          if (!res.phoneProof) throw new Error("The server did not confirm that number.");
+          signupProof.current = { phone: res.phone ?? phone, proof: res.phoneProof };
+          setPendingSignup({ phone: res.phone ?? phone });
+          return "new";
+        }
+        await afterAuth(res as { token: string; data: { user: unknown } });
+        return "signed-in";
       } catch (error) {
         setAuthError(error instanceof Error ? error.message : "That code was not accepted");
-        return false;
+        return "failed";
       } finally {
         setSigningIn(false);
       }
@@ -1076,40 +1175,41 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [afterAuth]
   );
 
-  const requestPasswordReset = useCallback<StoreValue["requestPasswordReset"]>(
-    async (email) => {
-      setAuthError(null);
-      setSigningIn(true);
-      try {
-        const res = await api.forgotPassword(email.trim());
-        // `channel` lets the screen say "sent to your mobile" rather than
-        // guessing which of the two the customer typed.
-        return { ok: true, code: res?.devOtp, channel: res?.channel };
-      } catch (error) {
-        setAuthError(error instanceof Error ? error.message : "Could not send the code");
-        return { ok: false };
-      } finally {
-        setSigningIn(false);
-      }
-    },
-    []
-  );
+  const cancelSignUp = useCallback(() => {
+    signupProof.current = null;
+    setPendingSignup(null);
+    setAuthError(null);
+  }, []);
 
-  const resetPassword = useCallback<StoreValue["resetPassword"]>(
-    async (email, otp, password) => {
+  const completeSignUp = useCallback<StoreValue["completeSignUp"]>(
+    async (input) => {
+      const held = signupProof.current;
+      if (!held) {
+        setAuthError("Verify your mobile number first.");
+        return false;
+      }
       setAuthError(null);
       setSigningIn(true);
       try {
-        await api.resetPassword(email.trim(), otp.trim(), password);
+        const result = await api.register({
+          ...input,
+          phone: held.phone,
+          phoneProof: held.proof,
+        });
+        // Signed in first, so the sign-up screen - which sends anybody with no
+        // number pending and no session back to the start - never sees the gap.
+        await afterAuth(result);
+        signupProof.current = null;
+        setPendingSignup(null);
         return true;
       } catch (error) {
-        setAuthError(error instanceof Error ? error.message : "Could not reset the password");
+        setAuthError(error instanceof Error ? error.message : "Could not create your account");
         return false;
       } finally {
         setSigningIn(false);
       }
     },
-    []
+    [afterAuth]
   );
 
   const signOut = useCallback(() => {
@@ -1142,15 +1242,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    * sample catalogue or a dead connection. It is only a quote; the amount
    * actually charged is read from the order the server creates.
    */
-  const [serverPricing, setServerPricing] = useState<{
-    itemTotal: number;
-    packaging: number;
-    delivery: number;
-    platformFee: number;
-    taxes: number;
-    toPay: number;
-    distanceKmUsed?: number;
-  } | null>(null);
+  const [serverPricing, setServerPricing] = useState<Totals | null>(null);
+  const [billStatus, setBillStatus] = useState<StoreValue["billStatus"]>("idle");
+  const [billNonce, setBillNonce] = useState(0);
 
   /**
    * Whether the detected position is the delivery destination.
@@ -1194,31 +1288,53 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!token || !cartRestaurantId || lines.length === 0) {
       setServerPricing(null);
+      setBillStatus("idle");
       return;
     }
 
     let cancelled = false;
+    setBillStatus("pending");
     // Settles briefly first: a customer tapping + on an item would otherwise
     // fire a quote for every tap.
     const timer = setTimeout(() => {
       api
-        .pricingPreview({ restaurantId: cartRestaurantId, lines, address: deliveryAddress })
+        .pricingPreview({
+          restaurantId: cartRestaurantId,
+          lines,
+          address: deliveryAddress,
+          couponCode: appliedOffer?.code,
+          useWallet,
+        })
         .then((res) => {
           if (cancelled) return;
           const d = res.data;
+          const discount = d.discount ?? 0;
+          const walletUsed = d.walletUsed ?? 0;
           setServerPricing({
             itemTotal: d.subtotal,
             packaging: d.packagingFee,
             delivery: d.deliveryFee,
             platformFee: d.platformFee,
             taxes: d.totalGST,
+            tip: d.tip ?? 0,
+            discount,
+            couponCode: d.couponCode || undefined,
+            couponError: d.couponError?.message ?? null,
+            walletUsed,
+            walletCap: d.walletCap ?? 0,
+            grossTotal: d.grossTotal ?? round2(d.finalTotal + discount + walletUsed),
+            saved: discount,
             toPay: d.finalTotal,
             distanceKmUsed: d.distanceKmUsed,
           });
+          setBillStatus("ready");
         })
         .catch(() => {
-          // Out of range, signed out, offline - the local figures stand.
-          if (!cancelled) setServerPricing(null);
+          // Out of range, signed out, offline - the estimate stands, and
+          // payment waits for a real price.
+          if (cancelled) return;
+          setServerPricing(null);
+          setBillStatus("failed");
         });
     }, 350);
 
@@ -1226,20 +1342,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [token, cartRestaurantId, lines, deliveryAddress]);
+  }, [token, cartRestaurantId, lines, deliveryAddress, appliedOffer, useWallet, billNonce]);
 
-  const totals = useMemo(() => {
-    const local = computeTotals(lines, cartRestaurantId, appliedOffer);
-    if (!serverPricing) return local;
-
-    /**
-     * The discount stays local because the preview does not price coupons;
-     * the order that gets created does, from the same code, so the two agree
-     * on it. Everything else is the server's figure.
-     */
-    const toPay = Math.max(0, Math.round(serverPricing.toPay - local.discount));
-    return { ...local, ...serverPricing, toPay };
-  }, [lines, cartRestaurantId, appliedOffer, serverPricing]);
+  /**
+   * The bill on screen: the server's own figures when it has priced the
+   * basket, an estimate before that.
+   *
+   * This used to splice the two - the server's total with a coupon discount
+   * the app had worked out for itself subtracted from it, the preview not
+   * knowing about coupons. The app's rule and the server's differed (the app
+   * took the coupon off the food, the server off the whole bill), so the
+   * figure shown was not the figure charged. Now the server prices the coupon
+   * and the wallet too, and nothing here is recomputed.
+   */
+  const totals = useMemo<Totals>(
+    () => serverPricing ?? computeTotals(lines, cartRestaurantId, appliedOffer),
+    [lines, cartRestaurantId, appliedOffer, serverPricing]
+  );
 
   const itemCount = useMemo(
     () => lines.reduce((sum, l) => sum + l.quantity, 0),
@@ -1260,7 +1379,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       authUser
         ? {
             ...seedCustomer,
-            name: authUser.name || seedCustomer.name,
+            // Never the fixture's name: an account without a usable one is
+            // "Customer", not somebody else's name on this person's screen.
+            name: authUser.name || FALLBACK_NAME,
             email: authUser.email,
             phone: authUser.phone,
             /*
@@ -1318,8 +1439,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         lines,
         address: deliveryAddress,
         paymentMethod,
-        couponCode: appliedOffer?.code,
-        useWallet: options?.useWallet,
+        // Only a coupon the server said applies. One it refused would refuse
+        // the whole order, and the bill on screen already shows it as not
+        // taking anything off.
+        couponCode: totals.couponError ? undefined : appliedOffer?.code,
+        useWallet: options?.useWallet ?? useWallet,
         notes: orderNotes.trim() || undefined,
       });
 
@@ -1339,7 +1463,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         status: placed.status ?? "Waiting for Confirmation",
         placedAt: now.toISOString(),
         etaAt: new Date(now.getTime() + eta * 60_000).toISOString(),
-        totals,
+        // What the server created the order at - its charge, not the app's
+        // idea of it. The payment screen compares this with what it showed.
+        totals: totalsFromApiOrder(placed, totals.itemTotal),
         addressId: selectedAddressId,
         paymentMethod,
         paymentDetail: paymentDetail ?? paymentMethod,
@@ -1371,6 +1497,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       dataSource,
       deliveryAddress,
       loadAuthedData,
+      useWallet,
+      orderNotes,
     ]
   );
 
@@ -1478,6 +1606,100 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  /** When each order's status was last written from the tracking feed. */
+  const statusSyncedAt = React.useRef(new Map<string, number>());
+
+  const syncOrderStatus = useCallback<StoreValue["syncOrderStatus"]>((orderId, status) => {
+    statusSyncedAt.current.set(orderId, Date.now());
+    setOrders((current) =>
+      current.some((o) => o.id === orderId && o.status !== status)
+        ? current.map((o) => (o.id === orderId ? { ...o, status } : o))
+        : current
+    );
+  }, []);
+
+  /**
+   * Order statuses, kept current while an order is still moving.
+   *
+   * The order list was read once, when the customer signed in, and never
+   * again. Whatever the restaurant, the rider or the admin console did to an
+   * order afterwards - confirmed it, handed it over, delivered it - reached
+   * this app only if the customer signed out and back in, so the Orders tab
+   * and the tracking screen went on describing the order as it had been at
+   * launch. That is the "still shows Preparing" report.
+   *
+   * Asked for again when the app returns to the foreground and every ten
+   * seconds while it is open, and only while some order is unfinished: once
+   * everything has been delivered or cancelled there is nothing left to change.
+   * Polling rather than a socket, as for the posters; the tracking screen asks
+   * more often than this for the one order it is showing.
+   *
+   * Only status and what the server allows (cancel, refund) are taken from the
+   * answer. The rest of a placed order - the address chosen, the dish details -
+   * is richer here than the server's list returns, and replacing it would lose
+   * that.
+   */
+  const hasLiveOrder = orders.some(
+    (o) => o.status !== "Delivered" && o.status !== "Cancelled" && o.status !== "Refunded"
+  );
+
+  useEffect(() => {
+    if (token === null || !hasLiveOrder) return;
+    let cancelled = false;
+    const POLL_MS = 10 * 1000;
+
+    const pull = () => {
+      const askedAt = Date.now();
+      api
+        .myOrders()
+        .then((rows) => {
+          if (cancelled) return;
+          const fresh = new Map(rows.map((row) => [String(row.id), row]));
+          setOrders((current) => {
+            let changed = false;
+            const next = current.map((o) => {
+              const row = fresh.get(o.id);
+              if (!row?.status) return o;
+              // The tracking screen has heard something newer than this
+              // answer was asked about; taking it would wind the status back.
+              if ((statusSyncedAt.current.get(o.id) ?? 0) > askedAt) return o;
+              if (
+                row.status === o.status &&
+                row.canCancel === o.canCancel &&
+                row.canRequestRefund === o.canRequestRefund
+              ) {
+                return o;
+              }
+              changed = true;
+              return {
+                ...o,
+                status: row.status,
+                canCancel: row.canCancel,
+                canRequestRefund: row.canRequestRefund,
+              };
+            });
+            return changed ? next : current;
+          });
+        })
+        .catch(() => {
+          /* keep what is showing; the next poll is soon */
+        });
+    };
+
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (next === "active") pull();
+    });
+    const timer = setInterval(() => {
+      if (AppState.currentState === "active") pull();
+    }, POLL_MS);
+
+    return () => {
+      cancelled = true;
+      subscription.remove();
+      clearInterval(timer);
+    };
+  }, [token, hasLiveOrder]);
+
   /** Accept a deferred order once its payment has gone through. */
   const commitPlacedOrder = useCallback<StoreValue["commitPlacedOrder"]>((order) => {
     setOrders((current) =>
@@ -1486,6 +1708,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setLines([]);
     setAppliedOffer(null);
     setOrderNotes("");
+    setUseWallet(false);
   }, []);
 
   const value = useMemo<StoreValue>(
@@ -1500,6 +1723,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setQuantity,
       clearCart,
       applyOffer: setAppliedOffer,
+      useWallet,
+      setUseWallet,
+      billStatus,
+      refreshBill: () => setBillNonce((n) => n + 1),
       addresses: addressBook,
       selectedAddressId,
       selectAddress,
@@ -1512,6 +1739,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       orders,
       placeOrder,
       commitPlacedOrder,
+      syncOrderStatus,
       customer,
       /*
        * Plus waives the delivery fee, so defaulting it to true handed free
@@ -1528,14 +1756,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       codEnabled,
       authError,
       signingIn,
-      signIn,
-      signUp,
-      verifyAccount,
-      resendVerification,
       requestOtp,
-      signInWithOtp,
-      requestPasswordReset,
-      resetPassword,
+      verifyOtp,
+      pendingSignup,
+      cancelSignUp,
+      completeSignUp,
       signOut,
       wallet,
       walletTransactions,
@@ -1548,7 +1773,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       orderNotes,
       setOrderNotes,
       dataSource,
-      apiBase: API_BASE,
       apiError,
       reloadCatalogue: () => setReloadCount((n) => n + 1),
       restaurants: catalogue.restaurants,
@@ -1585,6 +1809,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       appliedOffer,
       couponList,
       totals,
+      useWallet,
+      billStatus,
       addLine,
       setQuantity,
       clearCart,
@@ -1599,6 +1825,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       orders,
       placeOrder,
       commitPlacedOrder,
+      syncOrderStatus,
       addressBook,
       customer,
       dataSource,
@@ -1611,14 +1838,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       codEnabled,
       authError,
       signingIn,
-      signIn,
-      signUp,
-      verifyAccount,
-      resendVerification,
       requestOtp,
-      signInWithOtp,
-      requestPasswordReset,
-      resetPassword,
+      verifyOtp,
+      pendingSignup,
+      cancelSignUp,
+      completeSignUp,
       signOut,
       wallet,
       walletTransactions,

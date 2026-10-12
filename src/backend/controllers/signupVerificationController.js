@@ -12,7 +12,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import SignupVerification from '../models/SignupVerification.js';
-import User from '../models/User.js';
+import { findContactHolders, alreadyRegisteredBody } from '../utils/contactRegistry.js';
 import { sendEmail } from '../services/emailService.js';
 import { sendSms, isSmsConfigured } from '../services/smsService.js';
 
@@ -69,21 +69,21 @@ export const sendSignupCode = async (req, res) => {
     }
 
     /*
-     * Somebody already holds this. Said plainly rather than sending a code to
-     * an address that cannot be registered anyway - the alternative is a
-     * signup that only fails at the last step.
+     * Somebody already holds this - under any role. Said plainly rather than
+     * sending a code to an address that cannot be registered anyway: the
+     * alternative is a signup that only fails at the last step.
+     *
+     * Because proofs are only ever issued from here, refusing here is what
+     * stops a vendor signing up with a customer's number: no code, no proof,
+     * and registration will not proceed without one.
      */
-    const taken = await User.findOne(
-      channel === 'email' ? { email: value } : { phone: new RegExp(`${value}$`) }
-    ).lean();
+    const taken = await findContactHolders(
+      channel === 'email' ? { email: value } : { phone: value }
+    );
     if (taken) {
       return res.status(409).json({
-        status: 'error',
+        ...alreadyRegisteredBody(taken),
         code: 'already_registered',
-        message:
-          channel === 'email'
-            ? 'An account already uses that email address. Sign in instead.'
-            : 'An account already uses that mobile number. Sign in instead.',
       });
     }
 
@@ -96,6 +96,7 @@ export const sendSignupCode = async (req, res) => {
         codeHash: await bcrypt.hash(code, 10),
         attempts: 0,
         verified: false,
+        viaLogin: false,
         proof: undefined,
         // The other detail on the same form, so the two rows a signup leaves
         // behind can be recognised as one person.
@@ -166,6 +167,14 @@ export const confirmSignupCode = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'That code has expired. Ask for a new one.' });
     }
     if (record.verified && record.proof) {
+      if (record.viaLogin) {
+        // Proved by signing in, not by a code this endpoint can check a repeat
+        // against: the proof went to the app that signed in, and nowhere else.
+        return res.status(409).json({
+          status: 'error',
+          message: 'This number was already verified. Sign in again to continue.',
+        });
+      }
       // Already done. Handing the proof back keeps a retry harmless.
       return res.json({ status: 'success', message: 'Already verified.', data: { proof: record.proof } });
     }
@@ -222,4 +231,49 @@ export const proofHolds = async (channel, value, proof) => {
   return Boolean(record?.proof && record.proof === proof);
 };
 
-export default { sendSignupCode, confirmSignupCode, proofHolds };
+/**
+ * Records that a contact detail was proved some other way, and returns the
+ * proof registration will accept for it.
+ *
+ * Signing in by mobile number proves the number as a side effect: the code that
+ * was sent there came back. When nobody has an account on that number the
+ * person is sent to sign up, and the number does not have to be verified a
+ * second time - the proof issued here is the same one /confirm would have
+ * handed out, in the same table, so every registration endpoint checks it the
+ * way it already does.
+ */
+export const issueVerifiedProof = async (channel, value) => {
+  const proof = crypto.randomBytes(24).toString('hex');
+  const normalised = normalise(channel, value);
+  await SignupVerification.findOneAndUpdate(
+    { channel, value: normalised },
+    {
+      $set: {
+        channel,
+        value: normalised,
+        verified: true,
+        viaLogin: true,
+        proof,
+        attempts: 0,
+        expiresAt: new Date(Date.now() + VERIFIED_TTL_DAYS * 24 * 60 * 60 * 1000),
+      },
+      // No code is outstanding for this row; one left over from /send would
+      // otherwise sit there to be replayed.
+      $unset: { codeHash: 1 },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+  return proof;
+};
+
+/**
+ * Retires a proof once the account it was for exists.
+ *
+ * For registration that happens in a single request. The vendor and partner
+ * sign-ups are several requests long and are retried, so they keep theirs for
+ * the length of time it was already good for.
+ */
+export const releaseProof = (channel, value) =>
+  SignupVerification.deleteOne({ channel, value: normalise(channel, value) });
+
+export default { sendSignupCode, confirmSignupCode, proofHolds, issueVerifiedProof, releaseProof };

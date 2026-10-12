@@ -295,7 +295,7 @@ export default function CustomerDetailPage() {
     {
       id: "amount",
       header: "Amount",
-      cell: (order) => <span data-numeric>{currency(order.total)}</span>,
+      cell: (order) => <span data-numeric>{currency(order.total, true)}</span>,
     },
     {
       id: "status",

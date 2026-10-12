@@ -3,7 +3,8 @@ import cloudStorageService from '../services/cloudStorageService.js';
 import { proofHolds } from './signupVerificationController.js';
 import { getKycDisplayStatus } from '../utils/kycStatus.js';
 import crypto from 'crypto';
-import { checkPasswordStrength } from '../utils/identifier.js';
+import { readIdentifier } from '../utils/identifier.js';
+import { findContactHolders, alreadyRegisteredBody, duplicateContactFields } from '../utils/contactRegistry.js';
 
 /** Names the apps have used for the same document, mapped to the stored one. */
 const DOCUMENT_TYPE_ALIASES = {
@@ -138,10 +139,6 @@ export const registerRider = async (req, res) => {
       // Documents (from multipart form)
       documents,
 
-      // Credentials
-      password,
-      confirmPassword,
-
       // Where the rider lives, and where post should go
       fullAddress,
       city,
@@ -170,54 +167,37 @@ export const registerRider = async (req, res) => {
     } = req.body;
 
     /*
-     * Self-registration proves both contact details first.
+     * Both contact details are proved before the account exists.
      *
-     * An admin creating a rider goes through a different path - they supply no
-     * password, and the account is confirmed from the console afterwards - so
-     * this only gates riders signing themselves up.
+     * The mobile number was proved by the one-time code that brought the rider
+     * to this form, and the email address by the code sent to it on the form
+     * itself; each arrives here as a proof the server issued. This used to be
+     * demanded only of a request that carried a password, so leaving the
+     * password out also skipped the check - anyone could register a rider on an
+     * address or a number they had not proved they held.
      */
-    const selfRegistering = Boolean(password);
-    if (selfRegistering) {
-      const [emailOk, phoneOk] = await Promise.all([
-        proofHolds('email', email, emailProof),
-        proofHolds('phone', phone, phoneProof),
-      ]);
-      if (!emailOk || !phoneOk) {
-        return res.status(400).json({
-          status: 'error',
-          code: 'contact_not_verified',
-          message: !emailOk && !phoneOk
-            ? 'Verify your email address and mobile number before finishing.'
-            : !emailOk
-              ? 'Verify your email address before finishing.'
-              : 'Verify your mobile number before finishing.',
-        });
-      }
-    }
-
-    if (confirmPassword !== undefined && confirmPassword !== password) {
+    const [emailOk, phoneOk] = await Promise.all([
+      proofHolds('email', email, emailProof),
+      proofHolds('phone', phone, phoneProof),
+    ]);
+    if (!emailOk || !phoneOk) {
       return res.status(400).json({
         status: 'error',
-        message: 'The two passwords do not match.',
+        code: 'contact_not_verified',
+        message: !emailOk && !phoneOk
+          ? 'Verify your email address and mobile number before finishing.'
+          : !emailOk
+            ? 'Verify your email address before finishing.'
+            : 'Verify your mobile number before finishing.',
       });
     }
 
-    /**
-     * A rider who supplies no password is a rider an admin created on their
-     * behalf; they receive one the same way vendors do. A rider signing
-     * themselves up chooses one, and it has to clear the same floor as
-     * everyone else's.
+    /*
+     * There is no password: a rider signs in with a code sent to their number.
+     * The schema still wants one, and an unguessable value nobody is ever shown
+     * satisfies it without opening anything.
      */
-    let chosenPassword;
-    if (password) {
-      const strength = checkPasswordStrength(password);
-      if (!strength.ok) {
-        return res.status(400).json({ status: 'error', message: strength.reason });
-      }
-      chosenPassword = password;
-    } else {
-      chosenPassword = crypto.randomBytes(18).toString('base64url');
-    }
+    const chosenPassword = crypto.randomBytes(24).toString('base64url');
 
     // Handle multiple document uploads if files are provided
     let uploadedDocuments = {};
@@ -292,6 +272,19 @@ export const registerRider = async (req, res) => {
       });
     }
 
+    // Looked up below by these, so they have to be usable ones: the duplicate
+    // check ignores anything that is not a real email or mobile number.
+    if (readIdentifier(email).kind !== 'email') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'That email address does not look right.',
+      });
+    }
+    const phoneId = readIdentifier(phone);
+    if (phoneId.kind !== 'phone') {
+      return res.status(400).json({ status: 'error', message: phoneId.reason });
+    }
+
     if (!vehicleType || !vehicleNumber || !vehicleBrand || !vehicleModel) {
       return res.status(400).json({
         status: 'error',
@@ -306,18 +299,30 @@ export const registerRider = async (req, res) => {
       });
     }
 
-    // Check if user already exists
-    const existingUser = await User.findOne({
-      $or: [
-        { email: email.toLowerCase().trim() },
-        { phone: phone.replace(/\D/g, '').slice(-10) }
-      ]
-    });
+    /**
+     * An email address or mobile number belongs to one account, whatever role
+     * it was registered under: a customer's or a vendor's cannot become a
+     * delivery partner's.
+     *
+     * The phone half of this compared the bare ten digits with stored values
+     * that carry +91, so it matched nothing and a number already in use
+     * registered again; only the email was being refused, by the database.
+     */
+    const conflict = await findContactHolders({ email, phone });
 
-    if (existingUser) {
+    if (conflict) {
       // Idempotency-friendly behavior for client retries/timeouts:
-      // if key is present, treat existing rider as successful replay.
-      if (idempotencyKey && existingUser.role === 'rider') {
+      // if key is present, treat the same rider registering again as a
+      // successful replay. Both details have to belong to that one rider.
+      const [holder] = conflict.holders;
+      const sameRider =
+        idempotencyKey &&
+        conflict.holders.length === 1 &&
+        holder.role === 'rider' &&
+        conflict.asked.every((field) => conflict.fields.includes(field));
+      const existingUser = sameRider ? await User.findById(holder._id) : null;
+
+      if (existingUser) {
         return res.status(200).json({
           status: 'success',
           message: 'Rider already registered (idempotent replay)',
@@ -345,18 +350,14 @@ export const registerRider = async (req, res) => {
           },
         });
       }
-      return res.status(409).json({
-        status: 'error',
-        message: 'User with this email or phone already exists',
-      });
+      return res.status(409).json(alreadyRegisteredBody(conflict));
     }
 
     // Generate unique rider ID
     const riderId = `RID-${Date.now().toString(36).toUpperCase()}`;
 
-    // Normalize phone number
-    const phoneDigits = phone.replace(/\D/g, '').slice(-10);
-    const normalizedPhone = phoneDigits ? `+91${phoneDigits}` : '';
+    // Saved in the +91 form, validated above.
+    const normalizedPhone = phoneId.value;
 
     // Debug logging for date validation
     console.log('DateOfBirth received:', dateOfBirth, typeof dateOfBirth);
@@ -375,13 +376,7 @@ export const registerRider = async (req, res) => {
       phone: normalizedPhone,
       role: 'rider',
       riderId,
-      /**
-       * The password the rider chose.
-       *
-       * This was the literal string 'tempPassword123' for every rider on the
-       * platform, and none of them was ever told it -- so the account could not
-       * be signed into, and every rider shared one guessable credential.
-       */
+      /** Never shown to anyone and never used to sign in - see above. */
       password: chosenPassword,
       // Personal fields
       dateOfBirth: parsedDate,
@@ -506,12 +501,13 @@ export const registerRider = async (req, res) => {
     console.error('Rider registration error:', error);
     
     // Handle duplicate key errors
+    const clashed = duplicateContactFields(error);
+    if (clashed) {
+      return res.status(409).json(alreadyRegisteredBody({ fields: clashed }));
+    }
     if (error.code === 11000) {
-      let field = 'email or phone';
-      if (error.message.includes('email')) field = 'email';
-      else if (error.message.includes('phone')) field = 'phone';
-      else if (error.message.includes('riderId')) field = 'rider ID';
-      
+      const field = error.message.includes('riderId') ? 'rider ID' : 'email or phone';
+
       return res.status(409).json({
         status: 'error',
         message: `This ${field} is already registered`,

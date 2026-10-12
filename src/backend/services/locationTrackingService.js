@@ -3,6 +3,7 @@ import riderBatchService from './riderBatchService.js';
 import DeliveryBoy from '../models/DeliveryBoy.js';
 import UserNotification from '../models/UserNotification.js';
 import notificationService from './notificationService.js';
+import { customerStageFor } from '../utils/customerOrderStage.js';
 
 class LocationTrackingService {
   constructor() {
@@ -246,16 +247,30 @@ class LocationTrackingService {
        */
       const batch = await riderBatchService.batchViewFor(order);
 
+      const restaurantLocation = {
+        latitude: order.restaurantId?.address?.coordinates?.latitude || 0,
+        longitude: order.restaurantId?.address?.coordinates?.longitude || 0,
+      };
+
+      /**
+       * The customer-facing stage, worked out here from the order's own
+       * status so the customer, vendor, rider and admin screens are all
+       * reading one fact. See utils/customerOrderStage.js.
+       */
+      const { stage, times: stageTimes } = customerStageFor(order, {
+        riderLocation: trackingData?.currentLocation,
+        restaurantLocation,
+      });
+
       return {
         orderId: order._id,
         orderNumber: order.orderNumber,
         status: order.status,
+        stage,
+        stageTimes,
         batch,
         riderLocation: trackingData?.currentLocation,
-        restaurantLocation: {
-          latitude: order.restaurantId?.address?.coordinates?.latitude || 0,
-          longitude: order.restaurantId?.address?.coordinates?.longitude || 0,
-        },
+        restaurantLocation,
         deliveryLocation: {
           latitude: order.deliveryAddress?.coordinates?.latitude || 0,
           longitude: order.deliveryAddress?.coordinates?.longitude || 0,

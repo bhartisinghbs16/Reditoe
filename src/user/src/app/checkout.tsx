@@ -14,7 +14,7 @@ import {
 import { ScreenHeader, HeaderAction } from "@/components/screen-header";
 import { BillBreakdown } from "@/components/bill";
 import { accents, shadow } from "@/lib/theme";
-import { currency } from "@/lib/format";
+import { currency, currencyExact } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import { api, ApiError } from "@/lib/api";
 import {
@@ -98,6 +98,22 @@ const CASH_SECTION = {
   accent: "red" as const,
 };
 
+/**
+ * Thrown when the order the server created is not for the amount on screen.
+ *
+ * Prices can move between the quote and the order - a dish edited, a delivery
+ * charge changed. The customer is told before anything is charged, rather
+ * than finding a different figure in the payment sheet.
+ */
+class BillChanged extends Error {
+  constructor(
+    readonly shown: number,
+    readonly actual: number
+  ) {
+    super("The amount for this order has changed.");
+  }
+}
+
 export default function CheckoutScreen() {
   const router = useRouter();
   const {
@@ -108,6 +124,10 @@ export default function CheckoutScreen() {
     commitPlacedOrder,
     customer,
     codEnabled,
+    useWallet,
+    setUseWallet,
+    billStatus,
+    refreshBill,
   } = useStore();
 
   // Cash joins the list only for accounts the admin has allowed it for.
@@ -122,7 +142,6 @@ export default function CheckoutScreen() {
    */
   const [method, setMethod] = React.useState("upi");
   const [openSection, setOpenSection] = React.useState<string | null>("upi");
-  const [useWallet, setUseWallet] = React.useState(false);
   const [placing, setPlacing] = React.useState(false);
   /**
    * Whether an order for this basket now exists on the server.
@@ -143,7 +162,9 @@ export default function CheckoutScreen() {
    * zero behind the payment sheet.
    */
   const billAtOrder = React.useRef<typeof totals | null>(null);
-  const [billOpen, setBillOpen] = React.useState(false);
+  // Open from the start: the coupon discount and the net payable amount are
+  // what the customer came here to check, not detail to be hunted for.
+  const [billOpen, setBillOpen] = React.useState(true);
   /** The payment the native sheet is showing, if it is showing one. */
   const [sheet, setSheet] = React.useState<PaymentIntent | null>(null);
   const settle = React.useRef<{
@@ -183,14 +204,25 @@ export default function CheckoutScreen() {
   }
 
   /**
-   * A tenth of the order, or the balance if that is smaller. The server is
-   * what enforces this; the number here exists so the customer is not
-   * surprised at the end by how little of it applied.
+   * The most Reditoe Money this order can take, as the server worked it out
+   * from the balance, what is on hold and the share of the order the platform
+   * allows. This screen used to carry its own copy of that rule, which could
+   * quote one figure while the order took another.
    */
-  const WALLET_SHARE_OF_ORDER = 0.1;
-  const walletCap = Math.floor(
-    Math.min(customer.reditoeMoney ?? 0, (bill.toPay ?? 0) * WALLET_SHARE_OF_ORDER)
-  );
+  const walletCap = bill.walletCap ?? 0;
+
+  /**
+   * Whether the figure on screen is the server's price, and so safe to pay.
+   * While a new quote is on its way - after the wallet is switched, say - the
+   * numbers are about to change and the button waits for them.
+   */
+  const billReady = billStatus === "ready";
+  const billMessage =
+    billStatus === "pending"
+      ? "Updating your bill…"
+      : billStatus === "failed"
+        ? "We could not confirm the amount. Check your connection and retry."
+        : null;
 
 
   /**
@@ -252,26 +284,45 @@ export default function CheckoutScreen() {
    * was untrue: nobody was cooking it.
    */
   const onPay = async () => {
+    // Only ever a price the server has given. The button is disabled
+    // otherwise; this is for a tap that lands in the same instant.
+    if (!billReady) return;
+
     setPlacing(true);
     // Held before the basket is emptied, so the sheet and the bottom bar keep
     // showing the amount actually being charged.
-    billAtOrder.current = totals;
+    const shown = totals;
+    billAtOrder.current = shown;
+
+    /**
+     * The order the server wrote must be for the amount on screen.
+     *
+     * The quote and the order are priced by the same code, so they agree
+     * unless something moved in between - a menu price, a delivery charge. If
+     * it did, nothing has been charged yet, so stop here and say so.
+     */
+    const assertSameBill = (order: { totals: { toPay: number } }) => {
+      if (Math.abs(order.totals.toPay - shown.toPay) >= 0.005) {
+        throw new BillChanged(shown.toPay, order.totals.toPay);
+      }
+    };
 
     let pending: Awaited<ReturnType<typeof placeOrder>> | null = null;
     try {
       /*
        * Cash takes none of the gateway path: there is nothing to collect
-       * here, so the order is placed as 'cod' and committed straight away
+       * here, so the order is committed as soon as the bill checks out
        * rather than waiting on a receipt that will never come.
        */
       if (method === "cash") {
-        // No deferCommit: with nothing to collect there is no receipt to wait
-        // for, so placeOrder commits it and clears the basket itself.
-        const placed = await placeOrder("cod", "Cash on delivery", {
-          useWallet: useWallet && walletCap > 0,
+        pending = await placeOrder("cod", "Cash on delivery", {
+          deferCommit: true,
+          useWallet,
         });
+        assertSameBill(pending);
+        commitPlacedOrder(pending);
         setOrdered(true);
-        router.replace(`/order/${placed.id}?placed=1`);
+        router.replace(`/order/${pending.id}?placed=1`);
         return;
       }
 
@@ -285,8 +336,9 @@ export default function CheckoutScreen() {
        */
       pending = await placeOrder("razorpay", methodLabel(), {
         deferCommit: true,
-        useWallet: useWallet && walletCap > 0,
+        useWallet,
       });
+      assertSameBill(pending);
 
       const intent = await api.createPayment(pending.id);
       const receipt = await collectPayment(intent.data);
@@ -310,6 +362,18 @@ export default function CheckoutScreen() {
       // The basket is intact either way, so its bill goes back to tracking it
       // rather than staying frozen at a failed attempt.
       billAtOrder.current = null;
+
+      if (error instanceof BillChanged) {
+        // Quote again, so the screen shows the amount that would be charged.
+        refreshBill();
+        Alert.alert(
+          "The amount has changed",
+          `This order now comes to ${currencyExact(error.actual)}, not the ${currencyExact(
+            error.shown
+          )} shown - a price was updated while you were checking out. Nothing has been charged and your basket has been kept. Please review the bill and pay again.`
+        );
+        return;
+      }
 
       if (!pending) {
         Alert.alert(
@@ -390,7 +454,7 @@ export default function CheckoutScreen() {
             <View className="flex-row items-center gap-2 bg-leaf-50 px-3 py-3">
               <Ionicons name="pricetag" size={17} color={colors.leaf[600]} />
               <Txt size="sm" weight="semibold" tone="ok" className="min-w-0 flex-1">
-                Yay! You are saving {currency(bill.saved)} on this order
+                Yay! You are saving {currencyExact(bill.saved)} on this order
               </Txt>
               <Pressable
                 onPress={() => setBillOpen((open) => !open)}
@@ -412,7 +476,7 @@ export default function CheckoutScreen() {
           <View className="flex-row items-center justify-between p-3">
             <View>
               <Txt size="lg" weight="bold">
-                Total Payable
+                Net Payable
               </Txt>
               <Pressable
                 onPress={() => setBillOpen((open) => !open)}
@@ -430,13 +494,28 @@ export default function CheckoutScreen() {
               </Pressable>
             </View>
             <Txt size="2xl" weight="bold">
-              {currency(bill.toPay)}
+              {currencyExact(bill.toPay)}
             </Txt>
           </View>
 
           {billOpen && (
             <View className="border-t border-line px-3 py-3">
               <BillBreakdown totals={bill} />
+            </View>
+          )}
+
+          {billMessage && (
+            <View className="flex-row items-center justify-between gap-3 border-t border-line px-3 py-2.5">
+              <Txt size="tiny" tone={billStatus === "failed" ? "bad" : "muted"} className="min-w-0 flex-1">
+                {billMessage}
+              </Txt>
+              {billStatus === "failed" && (
+                <Pressable onPress={refreshBill} hitSlop={8}>
+                  <Txt size="tiny" weight="bold" tone="brand">
+                    Retry
+                  </Txt>
+                </Pressable>
+              )}
             </View>
           )}
         </Card>
@@ -509,7 +588,7 @@ export default function CheckoutScreen() {
             order may take; this only says the customer wants it used.
           */}
           <Pressable
-            onPress={() => setUseWallet((on) => !on)}
+            onPress={() => setUseWallet(!useWallet)}
             disabled={walletCap <= 0}
             className={`flex-row items-center gap-3 px-3 py-3.5 ${
               walletCap <= 0 ? "opacity-50" : "active:opacity-70"
@@ -520,7 +599,7 @@ export default function CheckoutScreen() {
               <Txt weight="semibold">Use Reditoe Money</Txt>
               <Txt size="tiny" tone="muted" numberOfLines={1}>
                 {walletCap > 0
-                  ? `Up to ${currency(walletCap)} off this order · balance ${currency(customer.reditoeMoney)}`
+                  ? `Up to ${currencyExact(walletCap)} off this order · balance ${currency(customer.reditoeMoney)}`
                   : `Balance ${currency(customer.reditoeMoney)} · nothing to apply on this order`}
               </Txt>
             </View>
@@ -561,7 +640,7 @@ export default function CheckoutScreen() {
         >
           <View>
             <Txt size="xl" weight="bold">
-              {currency(bill.toPay)}
+              {currencyExact(bill.toPay)}
             </Txt>
             <Pressable
               onPress={() => setBillOpen((open) => !open)}
@@ -587,15 +666,21 @@ export default function CheckoutScreen() {
           */}
           <Pressable
             onPress={onPay}
-            disabled={placing}
+            disabled={placing || !billReady}
             className={`h-14 min-w-0 flex-1 items-center justify-center rounded-tile bg-brand-600 ${
-              placing ? "opacity-70" : "active:opacity-90"
+              placing || !billReady ? "opacity-70" : "active:opacity-90"
             }`}
           >
             <Txt size="lg" weight="bold" tone="white">
-              {placing ? "Processing…" : `Pay ${currency(bill.toPay)}`}
+              {placing
+                ? "Processing…"
+                : billReady
+                  ? `Pay ${currencyExact(bill.toPay)}`
+                  : billStatus === "pending"
+                    ? "Updating bill…"
+                    : "Amount unavailable"}
             </Txt>
-            {!placing && (
+            {!placing && billReady && (
               <Txt size="micro" tone="white" className="opacity-90">
                 via {methodLabel()}
               </Txt>

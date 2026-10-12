@@ -13,6 +13,7 @@
  */
 
 import {
+  ApiError,
   api,
   request,
   requestRaw,
@@ -902,26 +903,107 @@ export interface VendorUser {
   role: string;
 }
 
-/** Uses the raw request: the token sits beside `data`, not inside it. */
-export function login(email: string, password: string) {
-  return requestRaw<{ token?: string; data?: { user?: VendorUser } }>(
-    "/auth/login",
-    { method: "POST", body: { email, password }, anonymous: true }
-  );
+/**
+ * Sign-in is by mobile number and a one-time code, and nothing else - there is
+ * no password. These two calls are the whole of it, and the same two serve the
+ * vendor app.
+ */
+
+/**
+ * Asks for a code to be texted to a mobile number.
+ *
+ * The server answers the same way whether or not the number has an account -
+ * whether it does is for the person who proves they hold it to find out - and
+ * hands the code back as `devOtp` only when it has no way to send a text, which
+ * is never the case in production.
+ */
+export async function sendOtp(phone: string) {
+  const body = await requestRaw<{
+    devOtp?: string;
+    data?: { resendAfterSeconds?: number };
+  }>("/auth/send-otp", {
+    method: "POST",
+    body: { phone, role: "vendor" },
+    anonymous: true,
+  });
+  return { devOtp: body?.devOtp, resendAfterSeconds: body?.data?.resendAfterSeconds };
+}
+
+/** What checking a code can come to. */
+export type VerifyResult =
+  /** The number has a vendor account. */
+  | { isNewUser: false; token: string; user: VendorUser | null }
+  /** It does not: nothing exists yet, and this proof is what sign-up trades on. */
+  | { isNewUser: true; phone: string; phoneProof: string };
+
+/**
+ * Exchanges the code for a session - or, for a number nobody has registered, a
+ * proof that it was verified.
+ */
+export async function verifyOtp(phone: string, otp: string): Promise<VerifyResult> {
+  const body = await requestRaw<{
+    isNewUser?: boolean;
+    token?: string;
+    phone?: string;
+    phoneProof?: string;
+    data?: { user?: VendorUser };
+  }>("/auth/verify-otp", {
+    method: "POST",
+    body: { phone, otp, role: "vendor" },
+    anonymous: true,
+  });
+
+  if (body.isNewUser) {
+    if (!body.phoneProof) throw new ApiError("The server did not confirm that number.", 500);
+    return { isNewUser: true, phone: body.phone ?? phone, phoneProof: body.phoneProof };
+  }
+
+  if (!body.token) throw new ApiError("The server did not return a token.", 500);
+  return { isNewUser: false, token: body.token, user: body.data?.user ?? null };
+}
+
+/**
+ * Sends a code to the restaurant's email address, for the sign-up form.
+ *
+ * Registration will not accept an email address without the server's proof that
+ * a code sent to it came back, so a tick drawn in the page on its own gets
+ * nowhere.
+ */
+export function sendEmailCode(email: string) {
+  return requestRaw("/signup-verification/send", {
+    method: "POST",
+    body: { channel: "email", value: email.trim(), role: "vendor" },
+    anonymous: true,
+  });
+}
+
+/** Checks the emailed code and returns the proof registration asks for. */
+export async function confirmEmailCode(email: string, code: string): Promise<string> {
+  const body = await requestRaw<{ data?: { proof?: string } }>("/signup-verification/confirm", {
+    method: "POST",
+    body: { channel: "email", value: email.trim(), code: code.trim() },
+    anonymous: true,
+  });
+  const proof = body?.data?.proof;
+  if (!proof) throw new ApiError("The server did not confirm that code.", 500);
+  return proof;
 }
 
 /**
  * What a new vendor tells us. The restaurant is created alongside the account,
  * which is why this cannot go through the generic /auth/register: that makes a
- * user with role "vendor" and no restaurant, and every vendor endpoint then
- * answers "Restaurant not found. Please complete your restaurant setup."
+ * customer, and every vendor endpoint then answers "Restaurant not found.
+ * Please complete your restaurant setup."
  */
 export interface VendorSignUpDraft {
   restaurantName: string;
   contactPersonName: string;
   email: string;
+  /** The mobile number that was verified by code, and the server's proof of it. */
   phone: string;
-  password: string;
+  phoneProof: string;
+  /** The server's proof that the emailed code came back. */
+  emailProof: string;
   city: string;
   street?: string;
   zipCode?: string;
@@ -931,17 +1013,12 @@ export interface VendorSignUpDraft {
 /**
  * Registers the vendor and their restaurant in one call, returning a token so
  * they land in the console rather than being bounced back to sign in.
- *
- * `alreadyRegistered` comes back when the email is a vendor who already exists
- * — the API signs them in instead of refusing, and the caller says so rather
- * than reporting a successful "signup" for an account they did not just make.
  */
 export function register(draft: VendorSignUpDraft) {
   return requestRaw<{
     token?: string;
     data?: { user?: VendorUser };
     user?: VendorUser;
-    alreadyRegistered?: boolean;
   }>("/vendor/register", {
     method: "POST",
     anonymous: true,
@@ -951,7 +1028,8 @@ export function register(draft: VendorSignUpDraft) {
       contactPersonNumber: draft.phone.trim(),
       email: draft.email.trim(),
       phone: draft.phone.trim(),
-      password: draft.password,
+      phoneProof: draft.phoneProof,
+      emailProof: draft.emailProof,
       city: draft.city.trim(),
       street: draft.street?.trim() || undefined,
       zipCode: draft.zipCode?.trim() || undefined,

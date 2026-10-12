@@ -3,6 +3,12 @@
     "name": "Reditoe Delivery Partner",
     "slug": "reditoe-rider",
     "version": "1.0.10",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/468b4a51-23af-47dc-ba77-06caba046518"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "reditoerider",
@@ -63,9 +69,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "2d2072d2-e5f9-4d71-b0ee-22d75a381be2"
+        "projectId": "468b4a51-23af-47dc-ba77-06caba046518"
       }
     },
-    "owner": "pillai.mk13"
+    "owner": "punto7x"
   }
 }

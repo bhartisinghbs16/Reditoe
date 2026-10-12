@@ -1,0 +1,20 @@
+# What EAS Build leaves out of the project archive it uploads.
+#
+# On Windows eas-cli does not apply nested .gitignore files, so everything git
+# ignores under src/ was being packed and uploaded anyway: 505 MB before
+# compression (136 MB on the wire), including the local MongoDB data, the Next.js
+# build cache and the server's .env. Uploads that size kept being reset.
+#
+# While this file exists eas-cli reads it INSTEAD of every .gitignore, so it has
+# to name what matters itself. node_modules and .git are always excluded.
+
+# Local server and admin console - not part of a phone build, and the apps import
+# nothing from them. Also keeps backend/.env and admin/.env.local off Expo's servers.
+src/backend
+src/admin
+
+# Generated or local-only.
+.expo
+.next
+dist
+.run-logs

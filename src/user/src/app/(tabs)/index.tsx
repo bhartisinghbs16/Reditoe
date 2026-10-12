@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  AppState,
   Image,
   Modal,
   Pressable,
@@ -7,7 +8,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Card, IconTile, SectionHead, Txt, colors } from "@/components/ui";
@@ -234,7 +235,28 @@ function SearchBar() {
   );
 }
 
-/** Full-bleed promo banner with paging dots, as the reference shows. */
+/** How long each banner holds before the next one slides in. */
+const BANNER_HOLD_MS = 6000;
+/** Longer than the slide takes, so the loop only jumps once it has landed. */
+const BANNER_SLIDE_MS = 700;
+
+/**
+ * The list with its first entry repeated at the end.
+ *
+ * That repeat is what lets the strip run on forever: after the last banner it
+ * slides on to a copy of the first, then quietly jumps back to the real one.
+ * Without it the loop had to scroll all the way back across every banner.
+ */
+function withLoopSlide<T>(list: T[]): T[] {
+  return list.length > 1 ? [...list, list[0]] : list;
+}
+
+/**
+ * Full-bleed promo banner with paging dots, as the reference shows.
+ *
+ * It advances by itself every few seconds and keeps going round. A swipe still
+ * works and holds the rotation until the customer lets go.
+ */
 function PromoCarousel() {
   const router = useRouter();
   const [page, setPage] = React.useState(0);
@@ -243,6 +265,20 @@ function PromoCarousel() {
   const GUTTER = 16;
   const cardWidth = screenWidth - GUTTER * 2;
   const snap = cardWidth + 12;
+
+  const scroller = React.useRef<ScrollView>(null);
+  /** Where the strip is, in pixels; read by the timer instead of kept in state. */
+  const offset = React.useRef(0);
+  /** A finger is on the strip, so the rotation waits. */
+  const [touching, setTouching] = React.useState(false);
+  /** Home is the tab on screen; the other tabs stay mounted behind it. */
+  const [focused, setFocused] = React.useState(true);
+  useFocusEffect(
+    React.useCallback(() => {
+      setFocused(true);
+      return () => setFocused(false);
+    }, [])
+  );
   /*
    * The admin's posters when there are any, and the offers the screen draws
    * itself when there are not.
@@ -256,27 +292,92 @@ function PromoCarousel() {
   const remoteBanners = adminBanners
     .map((banner) => ({ ...banner, imageUri: mediaUrl(banner.imageUrl) }))
     .filter((banner): banner is typeof banner & { imageUri: string } => Boolean(banner.imageUri));
-  const banners = remoteBanners.length > 0 ? remoteBanners : offers.slice(0, 4);
+  const fallbackOffers = offers.slice(0, 4);
+  const count = remoteBanners.length > 0 ? remoteBanners.length : fallbackOffers.length;
+  const looping = count > 1;
+
+  /** Back to the first poster, without animating. */
+  const jumpToStart = React.useCallback(() => {
+    offset.current = 0;
+    scroller.current?.scrollTo({ x: 0, animated: false });
+  }, []);
+
+  /**
+   * Swap the copy of the first poster for the real one, if that is where the
+   * strip is resting. Checked at the moment it runs, because it is also
+   * scheduled behind a slide and the customer may have taken hold since.
+   */
+  const settleLoop = React.useCallback(() => {
+    if (Math.round(offset.current / snap) >= count) jumpToStart();
+  }, [snap, count, jumpToStart]);
+
+  /*
+   * The rotation.
+   *
+   * It is torn down and rebuilt whenever a finger lands or lifts, so after a
+   * swipe the next banner is a full hold away rather than whatever was left on
+   * the old clock. It does nothing while the app is in the background.
+   */
+  React.useEffect(() => {
+    if (!looping || touching || !focused) return;
+
+    const timer = setInterval(() => {
+      if (AppState.currentState !== "active") return;
+
+      let current = Math.round(offset.current / snap);
+      // Resting on the copy of the first banner is the same picture as the
+      // first banner; step back onto the real one before moving on.
+      if (current >= count) {
+        jumpToStart();
+        current = 0;
+      }
+
+      const next = current + 1;
+      scroller.current?.scrollTo({ x: next * snap, animated: true });
+      if (next === count) setTimeout(settleLoop, BANNER_SLIDE_MS);
+    }, BANNER_HOLD_MS);
+
+    return () => clearInterval(timer);
+  }, [looping, touching, focused, count, snap, jumpToStart, settleLoop]);
+
+  /*
+   * The admin added or removed a poster, so the strip is a different length.
+   * Start again from the first rather than stay at an offset that may no
+   * longer mean anything.
+   */
+  React.useEffect(() => {
+    jumpToStart();
+    setPage(0);
+  }, [count, jumpToStart]);
 
   return (
     <View className="mt-1">
       <ScrollView
+        ref={scroller}
         horizontal
         showsHorizontalScrollIndicator={false}
         decelerationRate="fast"
         snapToInterval={snap}
         snapToAlignment="start"
-        onMomentumScrollEnd={(e) =>
-          setPage(Math.round(e.nativeEvent.contentOffset.x / snap))
-        }
+        scrollEventThrottle={16}
+        onScroll={(e) => {
+          const x = e.nativeEvent.contentOffset.x;
+          offset.current = x;
+          // The dots follow the strip as it moves, whether the customer or
+          // the timer is moving it; the copy at the end counts as the first.
+          setPage(Math.round(x / snap) % count);
+        }}
+        onScrollBeginDrag={() => setTouching(true)}
+        onScrollEndDrag={() => setTouching(false)}
+        onMomentumScrollEnd={settleLoop}
         contentContainerStyle={{ paddingHorizontal: GUTTER, gap: 12 }}
       >
         {remoteBanners.length > 0
-          ? remoteBanners.map((banner) => {
+          ? withLoopSlide(remoteBanners).map((banner, i) => {
               const imageUri = banner.imageUri;
               return (
               <Pressable
-                key={banner.id}
+                key={i === count ? `${banner.id}-loop` : banner.id}
                 accessibilityLabel={banner.title}
                 onPress={() => {
                   /*
@@ -299,9 +400,9 @@ function PromoCarousel() {
               </Pressable>
               );
             })
-          : banners.map((offer) => (
+          : withLoopSlide(fallbackOffers).map((offer, i) => (
           <Pressable
-            key={offer.id}
+            key={i === count ? `${offer.id}-loop` : offer.id}
             onPress={() => router.push("/offers")}
             style={{ width: cardWidth }}
             className="active:opacity-90"
@@ -368,7 +469,7 @@ function PromoCarousel() {
       </ScrollView>
 
       <View className="mt-2.5 flex-row justify-center gap-1.5">
-        {banners.map((_, i) => (
+        {Array.from({ length: count }, (_, i) => (
           <View
             key={i}
             className={`h-1.5 rounded-full ${
@@ -843,6 +944,8 @@ export default function HomeScreen() {
     selectedCategory,
     setSelectedCategory,
     isFirstTimeCustomer,
+    apiError,
+    reloadCatalogue,
   } = useStore();
   const popular = popularDishes();
   const [seeAllCategories, setSeeAllCategories] = React.useState(false);
@@ -909,7 +1012,33 @@ export default function HomeScreen() {
           {/* An empty list is a real answer — no vendor approved yet, or none
               delivering here. Rendering an empty rail leaves the page looking
               broken, which is how it was reported. */}
-          {restaurants.length === 0 ? (
+          {restaurants.length === 0 && apiError && !selectedCategory ? (
+            /*
+             * The request failed - which is not the same as there being
+             * nothing nearby, and saying "no restaurants" for it sent people
+             * away from an app that was only a second from working. This only
+             * shows when nothing has ever loaded: once a list has arrived, a
+             * failed refresh leaves it on screen.
+             */
+            <Card className="mx-4 items-center p-6">
+              <Ionicons name="cloud-offline-outline" size={30} color={colors.ink.faint} />
+              <Txt weight="bold" className="mt-2.5">
+                We couldn&apos;t load restaurants
+              </Txt>
+              <Txt size="tiny" tone="muted" className="mt-1 text-center">
+                Please check your connection and try again.
+              </Txt>
+              <Pressable
+                onPress={reloadCatalogue}
+                accessibilityLabel="Try loading restaurants again"
+                className="mt-3 rounded-lg bg-brand-600 px-4 py-2 active:opacity-80"
+              >
+                <Txt size="tiny" weight="bold" tone="white">
+                  Try again
+                </Txt>
+              </Pressable>
+            </Card>
+          ) : restaurants.length === 0 ? (
             <Card className="mx-4 items-center p-6">
               <Ionicons name="storefront-outline" size={30} color={colors.ink.faint} />
               <Txt weight="bold" className="mt-2.5">

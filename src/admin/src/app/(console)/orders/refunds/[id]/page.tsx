@@ -457,7 +457,7 @@ function RefundDetail({ refund }: { refund: Refund }) {
                       data-numeric
                       className="text-base font-semibold text-primary"
                     >
-                      {currency(order.data.total)}
+                      {currency(order.data.total, true)}
                     </span>
                   </div>
                 </div>

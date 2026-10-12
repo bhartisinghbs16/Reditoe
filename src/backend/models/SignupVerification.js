@@ -51,6 +51,18 @@ const signupVerificationSchema = new mongoose.Schema(
       default: false,
     },
     /**
+     * Verified by signing in with the number rather than by /confirm.
+     *
+     * Such a row holds no code, so /confirm has nothing to check an
+     * "already verified" repeat against. Without this flag it would hand the
+     * proof to anyone who named the number - and a proof is all it takes to
+     * register an account on it.
+     */
+    viaLogin: {
+      type: Boolean,
+      default: false,
+    },
+    /**
      * Handed back once the code is confirmed and required by registration, so
      * the server never has to take the app's word that a contact was verified.
      */

@@ -14,8 +14,8 @@ import "@/global.css";
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-/** The two routes reachable without a session. */
-const PUBLIC_ROUTES = new Set(["login", "signup", "forgot-password"]);
+/** The routes reachable without a session. */
+const PUBLIC_ROUTES = new Set(["login", "signup"]);
 
 /**
  * Sends a signed-out vendor to the login screen and a signed-in one back into

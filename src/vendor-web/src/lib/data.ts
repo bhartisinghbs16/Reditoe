@@ -294,7 +294,7 @@ export const settingsGroups: Array<{ title: string; rows: SettingsRow[] }> = [
   {
     title: "Account & Support",
     rows: [
-      { label: "Account Settings", description: "Change password, mobile number and email", icon: "user", tone: "blue" },
+      { label: "Account Settings", description: "Your name, mobile number and email", icon: "user", tone: "blue" },
       { label: "Privacy & Security", description: "Manage privacy settings and account security", icon: "shield", tone: "green" },
       { label: "Help & Support", description: "Get help, FAQs and contact support", icon: "help", tone: "amber" },
       { label: "About Reditoe Vendor", description: "App version, terms & conditions and privacy policy", icon: "info", tone: "violet" },

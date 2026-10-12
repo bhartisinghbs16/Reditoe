@@ -19,6 +19,7 @@
     "seed:all": "npm run seed:rbac && npm run seed:analytics && npm run seed:invoices && npm run seed:rider",
     "services:init": "node services/index.js",
     "test": "jest",
+    "test:auth": "node --test tests/otp-auth.test.mjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:integration": "jest --testPathPattern=integration",

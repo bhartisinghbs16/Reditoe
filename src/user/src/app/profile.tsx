@@ -12,9 +12,9 @@ import { api } from "@/lib/api";
  *
  * "Personal Information" and "Edit Profile" both pointed at the sign-in
  * screen, which for a customer who was already signed in did nothing useful —
- * there was nowhere in the app to correct a misspelt name or a changed phone
- * number. The email is shown but not edited: it identifies the account, and
- * changing it is a support job rather than a text field.
+ * there was nowhere in the app to correct a misspelt name. The email and the
+ * mobile number are shown but not edited: the number is what the account is
+ * signed into with, and both are support jobs rather than text fields.
  */
 function Field({
   label,
@@ -61,10 +61,12 @@ function Field({
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { customer, reloadAuthedData } = useStore();
+  const { customer, authUser, reloadAuthedData } = useStore();
 
-  const [name, setName] = React.useState(customer.name ?? "");
-  const [phone, setPhone] = React.useState(customer.phone ?? "");
+  // The account's own name, not the display one: an account without a usable
+  // name shows as "Customer" elsewhere, and that must not be offered here as if
+  // it were what the customer typed.
+  const [name, setName] = React.useState(authUser?.name ?? "");
   const [saving, setSaving] = React.useState(false);
 
   const save = async () => {
@@ -74,7 +76,9 @@ export default function ProfileScreen() {
     }
     setSaving(true);
     try {
-      await api.updateProfile({ name: name.trim(), phone: phone.trim() });
+      // Not the number: it is how this account is signed into, and the server
+      // refuses a change to it that has not been proved by a code.
+      await api.updateProfile({ name: name.trim() });
       await reloadAuthedData();
       Alert.alert("Saved", "Your details have been updated.");
       router.back();
@@ -96,11 +100,10 @@ export default function ProfileScreen() {
         <Card className="mx-4 mt-1 p-4">
           <Field label="Full name" value={name} onChangeText={setName} placeholder="Your name" />
           <Field
-            label="Phone"
-            value={phone}
-            onChangeText={setPhone}
-            placeholder="10-digit mobile number"
-            keyboardType="phone-pad"
+            label="Mobile number"
+            value={customer.phone ?? ""}
+            editable={false}
+            hint="This is how you sign in, so it can't be changed here. Contact support if you need to change it."
           />
           <Field
             label="Email"

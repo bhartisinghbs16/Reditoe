@@ -176,7 +176,7 @@ export default function OrdersPage() {
         <StackedCell
           numeric
           className="text-right"
-          primary={currency(order.total)}
+          primary={currency(order.total, true)}
           secondary={`${order.items?.length ?? 0} Item${
             (order.items?.length ?? 0) === 1 ? "" : "s"
           }`}

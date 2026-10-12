@@ -28,7 +28,9 @@ export const getPublicBanners = async (req, res) => {
       ],
     })
       .sort({ displayOrder: 1, createdAt: -1 })
-      .limit(10)
+      // A safety ceiling, not a design limit: the home carousel shows every
+      // live banner, so a cap of ten silently hid the eleventh upload.
+      .limit(20)
       .lean();
 
     return res.status(200).json({

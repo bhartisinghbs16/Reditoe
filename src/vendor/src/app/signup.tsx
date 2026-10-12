@@ -19,6 +19,7 @@ import {
 import { Badge, Button, Card, IconPlate, Txt, colors } from "@/components/ui";
 import { friendlyDateTime } from "@/lib/format";
 import { registerVendor, uploadKycDocument } from "@/lib/api";
+import { useStore } from "@/lib/store";
 import { VerifiedField } from "@/components/verified-field";
 import { tints, type TintName } from "@/lib/theme";
 
@@ -26,8 +27,10 @@ import { tints, type TintName } from "@/lib/theme";
  * Vendor Sign Up — a copy of the reference five-step onboarding flow:
  * Restaurant Info → Documents → Bank Details → Review → Complete.
  *
- * Step 4 posts to `/vendor/register`, which returns a token — so a successful
- * registration also signs the vendor in. Documents and bank details are
+ * Reached from Login once the vendor's mobile number has been verified and
+ * turned out not to belong to anybody; the number is carried in rather than
+ * asked for again. Step 4 posts to `/vendor/register`, which returns a token —
+ * so a successful registration also signs the vendor in. Documents and bank details are
  * collected on the way through but the register endpoint accepts neither;
  * they belong to the KYC and bank endpoints once the account exists.
  */
@@ -228,18 +231,14 @@ function RestaurantStep({
   setField,
   emailProof,
   setEmailProof,
-  phoneProof,
-  setPhoneProof,
 }: {
   cuisines: string[];
   toggleCuisine: (name: string) => void;
   form: Form;
   setField: (key: keyof Form, value: string) => void;
-  /** Proof from the server that each contact detail was confirmed. */
+  /** Proof from the server that the email address was confirmed. */
   emailProof: string | null;
   setEmailProof: (proof: string | null) => void;
-  phoneProof: string | null;
-  setPhoneProof: (proof: string | null) => void;
 }) {
   const [locating, setLocating] = React.useState(false);
   const [locationError, setLocationError] = React.useState<string | null>(null);
@@ -417,18 +416,24 @@ function RestaurantStep({
           />
         </View>
 
-        <VerifiedField
-          channel="phone"
-          label="Restaurant Contact Number"
-          placeholder="Enter mobile number"
-          icon="call-outline"
-          keyboardType="phone-pad"
-          value={form.phone}
-          onChangeText={(next) => setField("phone", next)}
-          proof={phoneProof}
-          onVerified={setPhoneProof}
-          className="mt-3"
-        />
+        {/*
+          The number the vendor signed in with: verified by the code that
+          brought them here, and not editable - it is what the account is for,
+          and what they will sign in with from now on.
+        */}
+        <View className="mt-3">
+          <FieldLabel label="Mobile Number" required />
+          <View className="h-12 flex-row items-center gap-2 rounded-tile border border-line bg-surface-sunken px-3">
+            <Ionicons name="call-outline" size={17} color={colors.ink.faint} />
+            <Txt weight="semibold" className="flex-1">
+              +91 {form.phone}
+            </Txt>
+            <Ionicons name="checkmark-circle" size={16} color={colors.ok.default} />
+            <Txt size="tiny" weight="semibold" tone="ok">
+              Verified
+            </Txt>
+          </View>
+        </View>
         <VerifiedField
           channel="email"
           label="Email ID"
@@ -442,8 +447,8 @@ function RestaurantStep({
           className="mt-3"
         />
         <Txt size="micro" tone="muted" className="mt-1.5">
-          Both are verified by a code before the application can be submitted —
-          they are how Reditoe and your customers reach the restaurant.
+          The email is verified by a code before the application can be submitted —
+          it and your mobile number are how Reditoe and your customers reach the restaurant.
         </Txt>
       </Card>
     </View>
@@ -1041,6 +1046,7 @@ function CompleteStep({
 
 export default function VendorSignUp() {
   const router = useRouter();
+  const { pendingSignup, cancelSignUp } = useStore();
   const [step, setStep] = React.useState(0);
   const [cuisines, setCuisines] = React.useState<string[]>(["North Indian"]);
   const [confirmed, setConfirmed] = React.useState(false);
@@ -1074,6 +1080,23 @@ export default function VendorSignUp() {
   const setField = (key: keyof Form, value: string) =>
     setForm((current) => ({ ...current, [key]: value }));
 
+  /*
+   * The number comes from the verification that brought the vendor here, and the
+   * proof of it travels with the registration. A vendor with no verified number
+   * has nothing to sign up with - the app was restarted, or this screen was
+   * opened some other way - and starts again at Login, which is where the number
+   * is verified. Not once the application is in: by then the number has done its
+   * job and is deliberately gone.
+   */
+  const phoneProof = pendingSignup?.phoneProof ?? null;
+  const verifiedPhone = pendingSignup?.phone.replace(/\D/g, "").slice(-10) ?? "";
+  React.useEffect(() => {
+    if (verifiedPhone) setField("phone", verifiedPhone);
+  }, [verifiedPhone]);
+  React.useEffect(() => {
+    if (!pendingSignup && !result) router.replace("/login");
+  }, [pendingSignup, result, router]);
+
   React.useEffect(() => {
     if (typeof params.ref === "string" && params.ref.trim()) {
       setField("referralCode", params.ref.trim().toUpperCase());
@@ -1093,19 +1116,14 @@ export default function VendorSignUp() {
    * confirmation tick.
    */
   const [emailProof, setEmailProof] = React.useState<string | null>(null);
-  const [phoneProof, setPhoneProof] = React.useState<string | null>(null);
 
   const missingDocuments = DOCUMENTS.filter(
     (doc) => doc.required && !uploaded[doc.type]
   );
 
   const stepProblem =
-    step === 0 && (!emailProof || !phoneProof)
-      ? !emailProof && !phoneProof
-        ? "Verify the restaurant's email address and mobile number to continue."
-        : !emailProof
-          ? "Verify the restaurant's email address to continue."
-          : "Verify the restaurant's mobile number to continue."
+    step === 0 && !emailProof
+      ? "Verify the restaurant's email address to continue."
       : step === 1 && missingDocuments.length > 0
       ? missingDocuments.length === 1
         ? `Upload your ${missingDocuments[0].label} before continuing.`
@@ -1136,8 +1154,8 @@ export default function VendorSignUp() {
     ? "Enter the restaurant name."
     : !form.city.trim()
       ? "Enter the city."
-      : !form.phone.trim() && !form.email.trim()
-        ? "Enter a phone number or an email address."
+      : !form.email.trim()
+        ? "Enter the restaurant's email address."
         : null;
 
   const submit = async () => {
@@ -1160,6 +1178,8 @@ export default function VendorSignUp() {
         applicationId: registration.applicationId,
         message: registration.message,
       });
+      // The number has done its job; the account exists and signs in with it.
+      cancelSignUp();
       setStep(4);
     } catch (reason: any) {
       setError(reason?.message ?? "Couldn't submit your registration.");
@@ -1204,8 +1224,6 @@ export default function VendorSignUp() {
             setField={setField}
             emailProof={emailProof}
             setEmailProof={setEmailProof}
-            phoneProof={phoneProof}
-            setPhoneProof={setPhoneProof}
           />
         )}
         {step === 1 && (

@@ -12,8 +12,9 @@ import {
 } from "@/lib/api";
 import {
   fetchMe,
-  login as loginRequest,
   register as registerRequest,
+  sendOtp as sendOtpRequest,
+  verifyOtp as verifyOtpRequest,
   type VendorSignUpDraft,
   type VendorUser,
 } from "@/lib/vendor-api";
@@ -32,9 +33,26 @@ type Status = "loading" | "authenticated" | "anonymous";
 interface AuthValue {
   status: Status;
   user: VendorUser | null;
-  signIn: (email: string, password: string) => Promise<void>;
-  /** Resolves true when the account was created, false when it already existed. */
-  signUp: (draft: VendorSignUpDraft) => Promise<boolean>;
+  /** Asks the server to text a one-time code to a mobile number. */
+  requestOtp: (phone: string) => Promise<{ devOtp?: string; resendAfterSeconds?: number }>;
+  /**
+   * Checks the code. A number with a vendor account is signed in
+   * ("signed-in"); one without comes back as "new", with the number held as
+   * verified until the sign-up form has what it needs.
+   */
+  verifyOtp: (phone: string, otp: string) => Promise<"signed-in" | "new">;
+  /**
+   * The number that has just been verified and has no account yet, with the
+   * proof the server issued for it. Held in memory only: it is good for one
+   * account and nothing is gained by it surviving a reload.
+   */
+  pendingSignup: { phone: string; phoneProof: string } | null;
+  /** Gives up on signing up, so the next attempt starts from the number again. */
+  cancelSignUp: () => void;
+  /** Creates the restaurant and the account on the verified number, and signs in. */
+  signUp: (
+    details: Omit<VendorSignUpDraft, "phone" | "phoneProof">
+  ) => Promise<void>;
   signOut: () => void;
 }
 
@@ -89,40 +107,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const signIn = React.useCallback(async (email: string, password: string) => {
-    const body = await loginRequest(email, password);
-    const token = body.token;
-    const account = body.data?.user;
+  const [pendingSignup, setPendingSignup] = React.useState<{
+    phone: string;
+    phoneProof: string;
+  } | null>(null);
 
-    if (!token) throw new ApiError("The server did not return a token.", 500);
-    if (account && account.role !== "vendor") {
+  const requestOtp = React.useCallback((phone: string) => sendOtpRequest(phone), []);
+
+  const verifyOtp = React.useCallback(async (phone: string, otp: string) => {
+    const result = await verifyOtpRequest(phone, otp);
+
+    if (result.isNewUser) {
+      setPendingSignup({ phone: result.phone, phoneProof: result.phoneProof });
+      return "new" as const;
+    }
+
+    if (result.user && result.user.role !== "vendor") {
       throw new ApiError(
-        `This is the vendor console — ${account.email} is signed up as "${account.role}".`,
+        `This is the vendor console — this number is signed up as "${result.user.role}".`,
         403
       );
     }
 
-    setToken(token);
-    setUser(account ?? null);
+    setPendingSignup(null);
+    setToken(result.token);
+    setUser(result.user);
     setStatus("authenticated");
+    return "signed-in" as const;
   }, []);
 
-  const signUp = React.useCallback(async (draft: VendorSignUpDraft) => {
-    const body = await registerRequest(draft);
-    const token = body.token;
-    const account = body.data?.user ?? body.user ?? null;
+  const cancelSignUp = React.useCallback(() => setPendingSignup(null), []);
 
-    if (!token) throw new ApiError("The server did not return a token.", 500);
+  const signUp = React.useCallback(
+    async (details: Omit<VendorSignUpDraft, "phone" | "phoneProof">) => {
+      if (!pendingSignup) {
+        throw new ApiError("Verify your mobile number first.", 400);
+      }
+      const body = await registerRequest({ ...details, ...pendingSignup });
+      const token = body.token;
+      const account = body.data?.user ?? body.user ?? null;
 
-    setToken(token);
-    setUser(account);
-    setStatus("authenticated");
+      if (!token) throw new ApiError("The server did not return a token.", 500);
 
-    // The API signs in an existing vendor rather than refusing, so the caller
-    // can tell them they already had an account instead of implying one was
-    // just created.
-    return !body.alreadyRegistered;
-  }, []);
+      setPendingSignup(null);
+      setToken(token);
+      setUser(account);
+      setStatus("authenticated");
+    },
+    [pendingSignup]
+  );
 
   const signOut = React.useCallback(() => {
     clearToken();
@@ -149,8 +182,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = React.useMemo<AuthValue>(
-    () => ({ status, user, signIn, signUp, signOut }),
-    [status, user, signIn, signUp, signOut]
+    () => ({
+      status,
+      user,
+      requestOtp,
+      verifyOtp,
+      pendingSignup,
+      cancelSignUp,
+      signUp,
+      signOut,
+    }),
+    [status, user, requestOtp, verifyOtp, pendingSignup, cancelSignUp, signUp, signOut]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -166,10 +208,7 @@ export function useAuthRedirect() {
   const pathname = usePathname();
   // Signup is as public as login. Leaving it out sent anonymous visitors
   // straight back to /login the moment they opened it.
-  // Resetting a password is as public as signing in — leaving it out sent
-  // anyone who could not sign in straight back to the screen they were stuck on.
-  const onAuthRoute =
-    pathname === "/login" || pathname === "/signup" || pathname === "/forgot-password";
+  const onAuthRoute = pathname === "/login" || pathname === "/signup";
 
   React.useEffect(() => {
     if (status === "loading") return;

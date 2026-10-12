@@ -3,6 +3,12 @@
     "name": "Reditoe Vendor",
     "slug": "reditoe-vendor",
     "version": "1.0.10",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/e8ef4616-5fc8-400d-a8fe-1402c3c622ca"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "reditoevendor",
@@ -56,9 +62,8 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "70de0b76-2784-4ceb-bd39-3a27ba03f868"
+        "projectId": "e8ef4616-5fc8-400d-a8fe-1402c3c622ca"
       }
-    },
-    "owner": "pillai.mk13"
+    }
   }
 }

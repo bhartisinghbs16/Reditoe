@@ -1,7 +1,8 @@
 import React from "react";
 import { Pressable, View } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { EMPTY_DRAFT, saveDraft } from "@/lib/registration";
+import { Ionicons } from "@expo/vector-icons";
+import { clearDraft, loadDraft, saveDraft, type RiderDraft } from "@/lib/registration";
 import {
   Button,
   Card,
@@ -11,15 +12,20 @@ import {
   Panel,
   Screen,
   Txt,
+  colors,
 } from "@/components/ui";
 import { AppBar } from "@/components/screen-header";
 import { RiderHero } from "@/components/brand";
-import { useSession } from "@/lib/session";
 
 /**
  * Create Account, reproduced from the reference: the courier artwork, the card
  * of fields with the terms tick and the red primary, then the "Why deliver
  * with Reditoe?" panel that closes the page.
+ *
+ * Reached from Login, once the mobile number has been verified and turned out
+ * not to belong to anybody. The number is shown as verified and is not asked
+ * for again; there is no password to choose, since sign-in is by a code sent to
+ * that number.
  */
 
 const REASONS = [
@@ -43,40 +49,51 @@ const REASONS = [
   },
 ];
 
-/** The API rejects anything shorter, and says so less clearly than this does. */
-const MIN_PASSWORD = 8;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Signup() {
   const router = useRouter();
   const params = useLocalSearchParams<{ ref?: string }>();
-  const { signUp } = useSession();
-  const [agreed, setAgreed] = React.useState(true);
-  const [reveal, setReveal] = React.useState(false);
-  const [confirmReveal, setConfirmReveal] = React.useState(false);
 
-  const [phone, setPhone] = React.useState("");
+  /** The application so far: at least the verified number, or we are not here. */
+  const [draft, setDraft] = React.useState<RiderDraft | null>(null);
+  const [agreed, setAgreed] = React.useState(true);
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
-  const [password, setPassword] = React.useState("");
-  const [confirm, setConfirm] = React.useState("");
   const [referral, setReferral] = React.useState("");
-  React.useEffect(() => {
-    if (typeof params.ref === "string" && params.ref.trim()) setReferral(params.ref.trim().toUpperCase());
-  }, [params.ref]);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
+  React.useEffect(() => {
+    void (async () => {
+      const saved = await loadDraft();
+      if (!saved || !saved.phoneProof) {
+        // No verified number: the way into this screen is Login, which is where
+        // the number gets verified.
+        router.replace("/(auth)/login");
+        return;
+      }
+      setDraft(saved);
+      setName(saved.name);
+      setEmail(saved.email);
+      setReferral(saved.referralCode ?? "");
+    })();
+  }, [router]);
+
+  React.useEffect(() => {
+    if (typeof params.ref === "string" && params.ref.trim()) setReferral(params.ref.trim().toUpperCase());
+  }, [params.ref]);
+
+  if (!draft) return null;
+
   async function submit() {
+    if (!draft) return;
     setError(null);
 
-    if (!name.trim()) return setError("Enter your full name.");
-    if (!phone.trim()) return setError("Enter your mobile number.");
+    if (name.trim().length < 2) return setError("Enter your full name.");
     // The account is created against an email, so it cannot be optional here
     // even though the field is labelled that way in the reference.
-    if (!email.trim()) return setError("Enter an email address to sign in with.");
-    if (password.length < MIN_PASSWORD)
-      return setError(`Use a password of at least ${MIN_PASSWORD} characters.`);
-    if (password !== confirm) return setError("The two passwords do not match.");
+    if (!EMAIL.test(email.trim())) return setError("Enter a valid email address.");
 
     setBusy(true);
     try {
@@ -85,17 +102,14 @@ export default function Signup() {
        *
        * The brief ends registration at Submit Application, not at sign-up, and
        * the remaining steps collect things the account needs anyway. Creating
-       * it now would leave a half-registered rider behind every attempt
+       * it now would leave a half-registered partner behind every attempt
        * somebody abandons at the documents step.
        */
       await saveDraft({
-        ...EMPTY_DRAFT,
+        ...draft,
         name: name.trim(),
         email: email.trim(),
-        phone: phone.trim(),
-        password,
         referralCode: referral.trim() || undefined,
-        step: 0,
       });
       router.replace("/(auth)/register");
     } catch (caught) {
@@ -109,9 +123,15 @@ export default function Signup() {
     }
   }
 
+  /** Back to the number: a different one may be the one they meant. */
+  const backToLogin = async () => {
+    await clearDraft();
+    router.replace("/(auth)/login");
+  };
+
   return (
     <Screen>
-      <AppBar title="" leading="back" />
+      <AppBar title="" leading="back" onLeading={backToLogin} />
 
       <View className="px-4">
         <Txt size="2xl" weight="bold">
@@ -127,14 +147,18 @@ export default function Signup() {
 
         <Card className="p-4">
           <View className="gap-3">
-            <Field
-              placeholder="Enter Mobile Number"
-              icon="call"
-              prefix="+91"
-              keyboardType="phone-pad"
-              value={phone}
-              onChangeText={setPhone}
-            />
+            {/* The number, as verified. Not editable: it is what the account is for. */}
+            <View className="min-h-12 flex-row items-center gap-2 rounded-tile border border-line bg-surface-sunken px-3 py-3">
+              <Ionicons name="call" size={18} color={colors.ink.muted} />
+              <Txt weight="semibold" className="flex-1">
+                +91 {draft.phone}
+              </Txt>
+              <Ionicons name="checkmark-circle" size={17} color={colors.green[600]} />
+              <Txt size="tiny" weight="semibold" className="text-green-600">
+                Verified
+              </Txt>
+            </View>
+
             <Field
               placeholder="Full Name"
               icon="person-outline"
@@ -147,24 +171,6 @@ export default function Signup() {
               keyboardType="email-address"
               value={email}
               onChangeText={setEmail}
-            />
-            <Field
-              placeholder="Password"
-              icon="lock-closed"
-              secure={!reveal}
-              trailing={reveal ? "eye-outline" : "eye-off-outline"}
-              onTrailing={() => setReveal((on) => !on)}
-              value={password}
-              onChangeText={setPassword}
-            />
-            <Field
-              placeholder="Confirm Password"
-              icon="lock-closed"
-              secure={!confirmReveal}
-              trailing={confirmReveal ? "eye-outline" : "eye-off-outline"}
-              onTrailing={() => setConfirmReveal((on) => !on)}
-              value={confirm}
-              onChangeText={setConfirm}
             />
             <Field
               placeholder="Referral Code (Optional)"
@@ -201,7 +207,7 @@ export default function Signup() {
           )}
 
           <Button
-            label={busy ? "Creating account…" : "Sign Up"}
+            label={busy ? "Saving…" : "Continue"}
             accent="brand"
             size="lg"
             disabled={!agreed || busy}
@@ -213,7 +219,7 @@ export default function Signup() {
             <Txt size="sm" tone="muted">
               Already have an account?
             </Txt>
-            <Pressable onPress={() => router.replace("/login")} hitSlop={8}>
+            <Pressable onPress={backToLogin} hitSlop={8}>
               <Txt size="sm" weight="bold" tone="brand">
                 Login
               </Txt>

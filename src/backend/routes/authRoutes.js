@@ -3,10 +3,24 @@ import {
   checkSetupToken,
   setPasswordWithToken,
 } from '../controllers/setPasswordController.js';
-import { register, signup, login, googleLogin, getProfile, getMe, updateProfile, completeProfile, sendOTP, verifyOTP, setPassword, forgotPassword, verifyForgotOTP, resetPassword, emailStatus, serviceStatus,
-  verifyAccount,
-  resendVerification,
+import {
+  register,
+  signup,
+  login,
+  googleLogin,
+  getProfile,
+  getMe,
+  updateProfile,
+  completeProfile,
+  setPassword,
+  forgotPassword,
+  verifyForgotOTP,
+  resetPassword,
+  emailStatus,
+  serviceStatus,
 } from '../controllers/user/authController.js';
+import { sendOtp, verifyOtp } from '../controllers/otpAuthController.js';
+import rateLimit from 'express-rate-limit';
 import { sendEmail } from '../services/emailService.js';
 import { protect } from '../middleware/auth.js';
 import { uploadProfilePhoto, handleUploadError } from '../middleware/uploadMiddleware.js';
@@ -32,21 +46,49 @@ const firstNonEmptyEnv = (...keys) => {
   return { key: null, value: '' };
 };
 
-// Main authentication routes
-router.post('/register', register);
-router.post('/signup', signup); // Alias for backward compatibility
+/**
+ * Per network, on top of the per-number limits in the controller.
+ *
+ * The API-wide limiter skips /auth altogether, so without this a single address
+ * could ask for codes to any number of different phones - which is what text
+ * message abuse looks like - or guess at codes across any number of accounts.
+ * Generous, because a mobile carrier puts a great many customers behind one
+ * address; the per-number limits are the ones that protect an individual.
+ */
+const perNetwork = (max) =>
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      status: 'error',
+      success: false,
+      message: 'Too many attempts from this network. Please wait a few minutes and try again.',
+    },
+  });
+
+/*
+ * Signing in. There is one way - a mobile number and the one-time code sent to
+ * it - and the same two calls serve the customer, vendor and delivery-partner
+ * apps. A number with an account is signed in; a number without one is handed a
+ * proof, which the app's sign-up screen trades for an account.
+ */
+router.post('/send-otp', perNetwork(60), sendOtp);
+router.post('/verify-otp', perNetwork(120), verifyOtp);
+
+// Creating a customer account, with the proof from verify-otp. Multipart: the
+// profile photo travels with the details.
+// The limit comes first: it is the multipart parse that writes the photo to
+// disk, so a refused request must be refused before that happens.
+router.post('/register', perNetwork(30), uploadProfilePhoto, handleUploadError, register);
+router.post('/signup', perNetwork(30), uploadProfilePhoto, handleUploadError, signup); // Alias for backward compatibility
+
+// Password and Google sign-in no longer exist. These answer 410 with a reason
+// instead of falling through to "route not found".
 router.post('/login', login);
 router.post('/google', googleLogin);
-
-router.post('/send-otp', sendOTP);
-
-router.post('/verify-otp', verifyOTP);
-// Changing your own password, so it needs a session: without `protect` this
-// set the password of whatever account the request body named.
-router.post('/set-password', protect, setPassword);
-// Finishing signup. The session starts at verification, not registration.
-router.post('/verify-account', verifyAccount);
-router.post('/resend-verification', resendVerification);
+router.post('/set-password', setPassword);
 
 router.post('/forgot-password', forgotPassword);
 
@@ -201,7 +243,6 @@ router.post(
 // Log registered routes for debugging
 console.log('✅ Auth routes registered:');
 console.log('   - POST /register');
-console.log('   - POST /login');
 console.log('   - POST /send-otp');
 console.log('   - POST /verify-otp');
 console.log('   - GET /env-check (NEW)');

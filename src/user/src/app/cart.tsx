@@ -18,7 +18,7 @@ import { ScreenHeader, HeaderIcon } from "@/components/screen-header";
 import { DishImage, SmallDishTile } from "@/components/cards";
 import { BillBreakdown } from "@/components/bill";
 import { shadow } from "@/lib/theme";
-import { currency } from "@/lib/format";
+import { currency, currencyExact } from "@/lib/format";
 import { useStore } from "@/lib/store";
 
 /**
@@ -30,9 +30,7 @@ import { useStore } from "@/lib/store";
 export default function CartScreen() {
   const router = useRouter();
   const [notesOpen, setNotesOpen] = React.useState(false);
-  const { appliedOffer, cartRestaurantId, clearCart, destination, dishById, dishesForRestaurant, lines, restaurantById, setQuantity, totals, orderNotes, setOrderNotes } = useStore();
-
-  const restaurant = cartRestaurantId ? restaurantById(cartRestaurantId) : null;
+  const { appliedOffer, cartRestaurantId, clearCart, destination, dishById, dishesForRestaurant, lines, setQuantity, totals, orderNotes, setOrderNotes } = useStore();
 
   if (lines.length === 0) {
     return (
@@ -248,7 +246,9 @@ export default function CartScreen() {
             </Txt>
             <Txt size="tiny" tone="muted" numberOfLines={1}>
               {appliedOffer
-                ? `You saved ${currency(totals.discount)} on this order`
+                ? totals.couponError
+                  ? `Not applied: ${totals.couponError}`
+                  : `You saved ${currencyExact(totals.discount)} on this order`
                 : "Apply coupon & save upto ₹250"}
             </Txt>
           </View>
@@ -265,10 +265,7 @@ export default function CartScreen() {
           <Txt size="lg" weight="bold" className="mb-2">
             Bill Details
           </Txt>
-          <BillBreakdown
-            totals={totals}
-            deliveryStruckFrom={restaurant?.deliveryFee}
-          />
+          <BillBreakdown totals={totals} />
         </View>
       </ScrollView>
 

@@ -21,7 +21,8 @@ import { RouteMap } from "@/components/map";
 import { Photo } from "@/components/photo";
 import { photoUri } from "@/lib/images";
 import { accents, categoryTint } from "@/lib/theme";
-import { currency, date, time } from "@/lib/format";
+import { currency, currencyExact, date, time } from "@/lib/format";
+import { BillLines } from "@/components/bill";
 import { addressTypeStyle } from "@/lib/data";
 import { LiveMap, type Coordinate } from "@/components/live-map";
 import { api } from "@/lib/api";
@@ -225,7 +226,14 @@ export default function OrderDetailScreen() {
         subtitle={`Order ID: ${order.code}`}
         subtitleIcon="copy-outline"
         onBack={() => (justPlaced ? router.replace("/orders") : router.back())}
-        right={<HeaderAction icon="headset-outline" label="Help" boxed />}
+        right={
+          <HeaderAction
+            icon="headset-outline"
+            label="Help"
+            boxed
+            onPress={() => router.push("/support")}
+          />
+        }
       />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-10">
@@ -475,42 +483,17 @@ export default function OrderDetailScreen() {
 
           <DashedRule className="my-3" />
 
-          {[
-            ["Item Total", order.totals.itemTotal],
-            ["Restaurant Packaging Charges", order.totals.packaging],
-            ["Delivery Charges", order.totals.delivery],
-            ["Platform Fee", order.totals.platformFee],
-            ["GST & Taxes", order.totals.taxes],
-          ].map(([label, value]) => (
-            <View
-              key={label as string}
-              className="flex-row items-center justify-between py-[3px]"
-            >
-              <Txt size="sm" tone="soft">
-                {label as string}
-              </Txt>
-              <Txt size="sm" weight="medium">
-                {currency(value as number)}
-              </Txt>
-            </View>
-          ))}
-
-          <DashedRule className="my-3" />
-
-          <View className="flex-row items-center justify-between">
-            <Txt weight="bold">
-              {order.paymentMethod === "COD" ? "Pay on Delivery" : "Paid Online"}
-            </Txt>
-            <Txt size="lg" weight="bold">
-              {currency(order.totals.toPay)}
-            </Txt>
-          </View>
+          {/* The same rows as the cart and payment screens - packaging, the
+              coupon discount and Reditoe Money included - so what was charged
+              is what adds up here. Whether it is paid or still due is said in
+              Payment Details below. */}
+          <BillLines totals={order.totals} totalLabel="Net Payable" />
 
           {order.totals.saved > 0 && (
             <View className="mt-2 flex-row items-center gap-1.5">
               <Ionicons name="pricetag" size={14} color={colors.ok.default} />
               <Txt size="tiny" weight="semibold" tone="ok">
-                You saved {currency(order.totals.saved)} on this order
+                You saved {currencyExact(order.totals.saved)} on this order
               </Txt>
             </View>
           )}
@@ -526,7 +509,7 @@ export default function OrderDetailScreen() {
             </Txt>
           </View>
           <View className="items-end">
-            <Txt weight="bold">{currency(order.totals.toPay)}</Txt>
+            <Txt weight="bold">{currencyExact(order.totals.toPay)}</Txt>
             <Txt size="tiny" weight="semibold" tone={cancelled ? "info" : "ok"}>
               {order.status === "Refunded"
                 ? "Refunded"
@@ -594,7 +577,7 @@ export default function OrderDetailScreen() {
             <IconTile icon="ribbon" tint={{ bg: colors.sun[500], fg: "#ffffff" }} size={40} />
             <View className="min-w-0 flex-1">
               <Txt size="sm" weight="bold" numberOfLines={2}>
-                You saved {currency(order.totals.saved)} with Reditoe Offers
+                You saved {currencyExact(order.totals.saved)} with Reditoe Offers
               </Txt>
               <Txt size="tiny" tone="muted">
                 Keep ordering & save more!

@@ -154,6 +154,58 @@ export interface AmountLine {
   emphasis?: boolean;
 }
 
+/**
+ * The whole tax charge on an order: GST on the food, and on the delivery and
+ * platform fees. `tax` alone is the food's share. Packaging is its own line and
+ * is NOT inside this figure - the server adds it to the total separately.
+ */
+export function orderTaxCharge(order: { tax?: number; gstAndPackaging?: number }) {
+  return order.gstAndPackaging || order.tax || 0;
+}
+
+/**
+ * GST on the delivery and platform fees: the tax charge less the food's share.
+ *
+ * This used to take packaging off as well, on the belief that the figure
+ * included it. It never has, so the line came out short by the packaging fee
+ * (and to zero on any order where that was larger) and the breakdown did not
+ * add up to the total.
+ */
+export function orderGstOnFees(order: { tax?: number; gstAndPackaging?: number }) {
+  return Math.max(0, (order.gstAndPackaging ?? 0) - (order.tax ?? 0));
+}
+
+/**
+ * The bill before the coupon and Reditoe Money come off it: the sum of its
+ * charge lines.
+ */
+export function orderBillTotal(order: {
+  subtotal?: number;
+  packagingFee?: number;
+  deliveryFee?: number;
+  platformFee?: number;
+  tax?: number;
+  gstAndPackaging?: number;
+  tip?: number;
+}) {
+  const paise =
+    Math.round((order.subtotal ?? 0) * 100) +
+    Math.round((order.packagingFee ?? 0) * 100) +
+    Math.round((order.deliveryFee ?? 0) * 100) +
+    Math.round((order.platformFee ?? 0) * 100) +
+    Math.round(orderTaxCharge(order) * 100) +
+    Math.round((order.tip ?? 0) * 100);
+  return paise / 100;
+}
+
+/**
+ * The same lines, in the same order and under the same names, as the customer
+ * sees in the app - so a support conversation about a bill is about one bill:
+ *
+ *   Net Payable = charges - coupon discount - Reditoe Money
+ *
+ * The charge rows are always listed, zero or not, as the app lists them.
+ */
 export function orderAmountLines(order: {
   subtotal?: number;
   packagingFee?: number;
@@ -163,35 +215,39 @@ export function orderAmountLines(order: {
   gstAndPackaging?: number;
   tip?: number;
   discount?: number;
+  couponCode?: string;
   walletUsed?: number;
   total?: number;
 }): AmountLine[] {
   const lines: AmountLine[] = [
-    { label: "Item total", value: order.subtotal ?? 0 },
+    { label: "Item Total", value: order.subtotal ?? 0 },
+    { label: "Restaurant Packaging Fee", value: order.packagingFee ?? 0 },
+    { label: "Delivery Fee", value: order.deliveryFee ?? 0 },
+    { label: "Platform Fee", value: order.platformFee ?? 0 },
+    /**
+     * One tax line, never two.
+     *
+     * `tax` is the food's share of the tax charge, not a second charge on top
+     * of it. Listing both counted the food's GST twice and left a bill whose
+     * lines came to more than the total underneath them - on a 318.09 order
+     * the lines added up to 330.54.
+     */
+    { label: "GST & Charges", value: orderTaxCharge(order) },
   ];
 
-  if (order.packagingFee) lines.push({ label: "Packaging", value: order.packagingFee });
-  if (order.deliveryFee) lines.push({ label: "Delivery fee", value: order.deliveryFee });
-  if (order.platformFee) lines.push({ label: "Platform fee", value: order.platformFee });
-  /**
-   * One tax line, never two.
-   *
-   * `gstAndPackaging` is the whole tax charge: GST on the food, GST on the
-   * delivery and platform fees, and packaging. `tax` is the food part of it on
-   * its own. Listing both counted the food's GST twice and left a bill whose
-   * lines came to more than the total underneath them - on a 318.09 order the
-   * lines added up to 330.54.
-   */
-  if (order.gstAndPackaging)
-    lines.push({ label: "GST & packaging", value: order.gstAndPackaging });
-  else if (order.tax) lines.push({ label: "Taxes", value: order.tax });
   if (order.tip) lines.push({ label: "Tip", value: order.tip });
   if (order.discount)
-    lines.push({ label: "Discount", value: order.discount, negative: true });
+    lines.push({
+      label: order.couponCode
+        ? `Coupon Discount (${order.couponCode})`
+        : "Coupon Discount",
+      value: order.discount,
+      negative: true,
+    });
   if (order.walletUsed)
-    lines.push({ label: "Wallet credit", value: order.walletUsed, negative: true });
+    lines.push({ label: "Reditoe Money", value: order.walletUsed, negative: true });
 
-  lines.push({ label: "Total paid", value: order.total ?? 0, emphasis: true });
+  lines.push({ label: "Net Payable", value: order.total ?? 0, emphasis: true });
   return lines;
 }
 

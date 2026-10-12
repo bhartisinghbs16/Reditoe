@@ -41,7 +41,7 @@ function OrderCard({ order }: { order: Order }) {
       </div>
 
       <p className="mt-1 truncate text-xs text-muted-foreground">
-        {customer?.name ?? "Guest"} · {currency(order.total)}
+        {customer?.name ?? "Guest"} · {currency(order.total, true)}
       </p>
 
       {/* `truncate` has to sit on the text node itself — on the flex row it

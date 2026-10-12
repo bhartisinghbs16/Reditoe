@@ -194,7 +194,7 @@ export default function VendorMore() {
       icon: "person-outline",
       label: "Account Settings",
       href: "/account-settings",
-      detail: "Change password, mobile number and email",
+      detail: "Your name, mobile number and email",
     },
     {
       icon: "lock-closed-outline",

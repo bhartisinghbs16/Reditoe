@@ -252,64 +252,66 @@ export interface SessionUser {
   role: string;
 }
 
-export async function login(email: string, password: string) {
-  // The token sits beside `data`, not inside it, so this one call reads the
-  // envelope rather than the unwrapped body.
-  const body = await requestRaw("/auth/login", {
-    method: "POST",
-    body: { email, password },
-    auth: false,
-  });
-
-  if (!body?.token) throw new ApiError("Sign-in succeeded but no token was returned.", 500);
-
-  const user = body?.data?.user as SessionUser | undefined;
-  if (user?.role !== "vendor") {
-    throw new ApiError("That account isn't a vendor account.", 403);
-  }
-
-  await setToken(body.token);
-  return user;
-}
+/**
+ * Sign-in is by mobile number and a one-time code, and nothing else. There is no
+ * password: a kitchen phone is shared and passwords get lost.
+ */
 
 /**
- * Asks for a one-time code.
+ * Asks for a code to be texted to a mobile number.
  *
- * The role is sent so the server knows which door was knocked on: an address
- * that is not a vendor here is told so, rather than being quietly signed up
- * as one.
+ * The role is sent so the server knows which door was knocked on. It answers the
+ * same way whether or not the number has an account - that is for the person who
+ * proves they hold it to find out - and hands the code back as `devOtp` only
+ * when it has no way to send a text, which is never the case in production.
  */
-export async function sendOtp(emailOrPhone: string) {
-  return requestRaw("/auth/send-otp", {
+export async function sendOtp(
+  phone: string
+): Promise<{ devOtp?: string; resendAfterSeconds?: number }> {
+  const body = await requestRaw("/auth/send-otp", {
     method: "POST",
-    body: { emailOrPhone, role: "vendor" },
+    body: { phone, role: "vendor" },
     auth: false,
   });
+  return { devOtp: body?.devOtp, resendAfterSeconds: body?.data?.resendAfterSeconds };
 }
 
+/** What checking a code can come to. */
+export type VerifyResult =
+  /** The number has a vendor account: signed in, session stored. */
+  | { isNewUser: false; user: SessionUser }
+  /** It does not: nothing exists yet, and this proof is what sign-up trades on. */
+  | { isNewUser: true; phone: string; phoneProof: string };
+
 /**
- * Exchanges the code for a session.
+ * Exchanges the code for a session - or, for a number nobody has registered, a
+ * proof that it was verified.
  *
- * `selectedRole` is what stops a customer's code opening the vendor app; the
- * server refuses when the account is not a vendor, and the check belongs
- * there rather than here where it could simply be skipped.
+ * `role` is what stops a customer's code opening the vendor app; the server
+ * refuses when the account is not a vendor, and the check belongs there rather
+ * than here where it could simply be skipped.
  */
-export async function verifyOtp(emailOrPhone: string, otp: string) {
+export async function verifyOtp(phone: string, otp: string): Promise<VerifyResult> {
   const body = await requestRaw("/auth/verify-otp", {
     method: "POST",
-    body: { emailOrPhone, otp, selectedRole: "vendor" },
+    body: { phone, otp, role: "vendor" },
     auth: false,
   });
+
+  if (body?.isNewUser) {
+    if (!body.phoneProof) throw new ApiError("The server did not confirm that number.", 500);
+    return { isNewUser: true, phone: body.phone ?? phone, phoneProof: body.phoneProof };
+  }
 
   if (!body?.token) throw new ApiError("Sign-in succeeded but no token was returned.", 500);
 
   const user = body?.data?.user as SessionUser | undefined;
-  if (user?.role !== "vendor") {
+  if (!user || user.role !== "vendor") {
     throw new ApiError("That account isn't a vendor account.", 403);
   }
 
   await setToken(body.token);
-  return user;
+  return { isNewUser: false, user };
 }
 
 /** One support conversation, with everything said in it so far. */

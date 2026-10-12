@@ -67,7 +67,13 @@ import {
   useUpdateOrderNotes,
   useUpdateOrderStatus,
 } from "@/lib/queries";
-import { ORDER_STATUS_OPTIONS, orderAmountLines, orderStatusLabel } from "@/lib/domain";
+import {
+  ORDER_STATUS_OPTIONS,
+  orderAmountLines,
+  orderBillTotal,
+  orderGstOnFees,
+  orderStatusLabel,
+} from "@/lib/domain";
 import {
   currency,
   date as formatDate,
@@ -343,10 +349,9 @@ function OrderDetail({ order }: { order: Order }) {
   const cancelled = order.status === "Cancelled";
   const amountLines = orderAmountLines(order);
   /** The tax charged on the fees rather than on the food. Never below zero. */
-  const gstOnFees = Math.max(
-    0,
-    (order.gstAndPackaging ?? 0) - (order.tax ?? 0) - (order.packagingFee ?? 0)
-  );
+  const gstOnFees = orderGstOnFees(order);
+  /** The bill before the coupon and Reditoe Money come off it. */
+  const billTotal = orderBillTotal(order);
   const itemCount = (order.items ?? []).reduce(
     (sum, item) => sum + (item.quantity ?? 1),
     0
@@ -441,7 +446,7 @@ function OrderDetail({ order }: { order: Order }) {
           icon={Receipt}
           tint="amber"
           label="Order Amount"
-          value={currency(order.total)}
+          value={currency(order.total, true)}
           hint={<a href="#payment-breakdown">View Breakup</a>}
           hintTone="link"
         />
@@ -469,7 +474,7 @@ function OrderDetail({ order }: { order: Order }) {
           icon={Truck}
           tint="violet"
           label="Delivery Charge"
-          value={currency(order.deliveryFee ?? 0)}
+          value={currency(order.deliveryFee ?? 0, true)}
           hint={<a href="#payment-breakdown">View Breakup</a>}
           hintTone="link"
         />
@@ -578,9 +583,9 @@ function OrderDetail({ order }: { order: Order }) {
           </div>
 
           <div className="mx-4 mb-4 flex items-center justify-between rounded-lg bg-primary/8 px-4 py-3">
-            <span className="text-sm font-semibold text-primary">Total Amount</span>
+            <span className="text-sm font-semibold text-primary">Net Payable</span>
             <span data-numeric className="text-lg font-semibold text-primary">
-              {currency(order.total)}
+              {currency(order.total, true)}
             </span>
           </div>
         </Panel>
@@ -962,23 +967,28 @@ function OrderDetail({ order }: { order: Order }) {
 
       <div className="mt-3 grid items-start gap-3 xl:grid-cols-[2fr_1fr]">
         {/*
-          `gstAndPackaging` is the entire tax charge on the order: GST on the
-          food, GST on the delivery and platform fees, and packaging. `tax` is
-          the food's share of it. This line wants what is left once the food's
-          share and the packaging are taken out - printing the whole figure
-          here showed it twice and made the breakdown add up to more than the
-          total beneath it.
+          The customer's bill, line for line as the app prints it:
+
+            Item Total + Packaging + Delivery + Platform Fee + GST (on items,
+            and on the delivery and platform fees) + Tip  =  Bill Total
+            Bill Total - Coupon Discount - Reditoe Money  =  Net Payable
+
+          `gstAndPackaging` is the whole tax charge - GST on the food and on the
+          two fees; `tax` is the food's share of it, so the second GST line is
+          what is left. Packaging is not in either. The coupon discount and the
+          wallet money were missing from this panel, so it stopped at a total
+          that did not follow from the lines above it.
         */}
         <Panel title="Payment Breakdown" className="scroll-mt-20" id="payment-breakdown">
           <div className="grid gap-x-8 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <BreakdownLine label="Item Total" value={currency(order.subtotal, true)} />
               <BreakdownLine
-                label="Restaurant Packaging Charge"
+                label="Restaurant Packaging Fee"
                 value={currency(order.packagingFee ?? 0, true)}
               />
               <BreakdownLine
-                label="Delivery Charge"
+                label="Delivery Fee"
                 value={currency(order.deliveryFee ?? 0, true)}
               />
             </div>
@@ -996,24 +1006,48 @@ function OrderDetail({ order }: { order: Order }) {
                 label="GST on Delivery & Platform Fee"
                 value={currency(gstOnFees, true)}
               />
+              {(order.tip ?? 0) > 0 && (
+                <BreakdownLine label="Tip" value={currency(order.tip, true)} />
+              )}
             </div>
             <div>
+              <BreakdownLine label="Bill Total" value={currency(billTotal, true)} />
               <BreakdownLine
-                label="Total Amount Paid"
+                label={
+                  order.couponCode
+                    ? `Coupon Discount (${order.couponCode})`
+                    : "Coupon Discount"
+                }
+                value={`${(order.discount ?? 0) > 0 ? "−" : ""}${currency(
+                  order.discount ?? 0,
+                  true
+                )}`}
+              />
+              {(order.walletUsed ?? 0) > 0 && (
+                <BreakdownLine
+                  label="Reditoe Money"
+                  value={`−${currency(order.walletUsed, true)}`}
+                />
+              )}
+              <BreakdownLine
+                label="Net Payable"
                 tone="danger"
                 value={currency(order.total, true)}
               />
-              <BreakdownLine
-                label="You Earn (Restaurant)"
-                chip="success"
-                value={currency(restaurantEarns, true)}
-              />
-              <BreakdownLine
-                label="Reditoe Commission"
-                chip="info"
-                value={currency(commission, true)}
-              />
             </div>
+          </div>
+
+          <div className="mt-1 grid gap-x-8 border-t border-border pt-1 sm:grid-cols-2 lg:grid-cols-3">
+            <BreakdownLine
+              label="You Earn (Restaurant)"
+              chip="success"
+              value={currency(restaurantEarns, true)}
+            />
+            <BreakdownLine
+              label="Reditoe Commission"
+              chip="info"
+              value={currency(commission, true)}
+            />
           </div>
         </Panel>
 

@@ -183,7 +183,7 @@ export default function PartnerDetailPage() {
       id: "amount",
       header: "Amount",
       align: "right",
-      cell: (order) => <span className="tabular-nums">{currency(order.total)}</span>,
+      cell: (order) => <span className="tabular-nums">{currency(order.total, true)}</span>,
     },
     {
       id: "status",

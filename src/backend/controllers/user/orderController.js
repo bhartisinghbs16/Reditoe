@@ -314,6 +314,14 @@ const buildPricedOrderItems = async ({ restaurant, items = [] }) => {
   };
 };
 
+/**
+ * `orderTotal` here is the item total (subtotal) - the figure the coupon's
+ * minimum order value and its percentage are measured against. It used to be
+ * the whole bill with taxes and fees, so a 10% coupon took 10% off the GST and
+ * the delivery fee too, and a minimum order of 200 was met by a 150 basket that
+ * carried 60 of charges. The coupon list, `/coupons/validate` and the app all
+ * talk about the item total; this now agrees with them.
+ */
 const calculateCouponDiscount = async ({ couponCode, orderTotal, restaurantId, userId }) => {
   const code = String(couponCode || '').trim().toUpperCase();
   if (!code) return { couponCode: '', discount: 0, coupon: null };
@@ -389,49 +397,235 @@ const calculateCouponDiscount = async ({ couponCode, orderTotal, restaurantId, u
   };
 };
 
+/*
+ * Money is worked out in paise so that a bill's lines always add up to its
+ * total. Each line is rounded to the paisa once, and the total is the sum of
+ * those rounded lines - never a separately rounded sum of unrounded ones, which
+ * is how a bill could show 30.00 + 8.00 + 112.40 against a total of 150.41.
+ */
+const toPaise = (rupees) => Math.round((Number(rupees) || 0) * 100);
+const fromPaise = (paise) => paise / 100;
+const round2 = (rupees) => fromPaise(toPaise(rupees));
+
+/**
+ * How much of the order's Reditoe Money balance may go towards it.
+ *
+ * The balance less anything on hold, and nothing while the wallet is frozen;
+ * capped at a share of what is still owed (set in Settings, ten percent by
+ * default) and rounded down to whole rupees.
+ */
+const computeWalletUsage = async ({ user, payableBeforeWallet }) => {
+  try {
+    const userWallet = await Wallet.findOne({ userId: user._id });
+    const rawBalance = Number(userWallet?.balance ?? user.walletBalance ?? 0);
+    const heldAmount = Number(userWallet?.heldAmount ?? 0);
+    const spendable = userWallet?.isFrozen ? 0 : Math.max(0, rawBalance - heldAmount);
+    if (spendable <= 0) return { walletUsed: 0, spendable: 0, maxWalletPercent: 0 };
+
+    let maxWalletPercent = 10;
+    try {
+      const settings = await Settings.findOne({});
+      if (settings?.walletSettings?.enabled && settings?.walletSettings?.maxUsagePercentage) {
+        maxWalletPercent = settings.walletSettings.maxUsagePercentage;
+      }
+      // Never more than the whole order, whatever the setting says.
+      maxWalletPercent = Math.min(100, Math.max(0, maxWalletPercent));
+    } catch (e) {
+      console.log('Settings fetch error:', e.message);
+    }
+
+    const maxWalletUsage = payableBeforeWallet * (maxWalletPercent / 100);
+    return {
+      walletUsed: Math.max(0, Math.floor(Math.min(spendable, maxWalletUsage))),
+      spendable,
+      maxWalletPercent,
+    };
+  } catch (walletCheckErr) {
+    console.log('Wallet check error:', walletCheckErr.message);
+    return { walletUsed: 0, spendable: 0, maxWalletPercent: 0 };
+  }
+};
+
+/**
+ * The one place an order's bill is worked out.
+ *
+ * The price preview and order creation each carried their own copy of this
+ * arithmetic, and the preview's copy knew nothing of coupons or Reditoe Money.
+ * So the checkout screen quoted one figure, the app patched its own coupon
+ * discount onto it, and the order that was created charged a third - with the
+ * admin console then showing a breakdown that left the discount out. Both
+ * callers now ask this, and what it returns is what is stored, charged and
+ * shown:
+ *
+ *   total = subtotal + packagingFee + deliveryFee + platformFee
+ *           + gstAndPackaging + tip - discount - walletUsed
+ *
+ * The order of the deductions matters: the coupon comes off the item total
+ * first, and the wallet is then capped against what is still owed.
+ *
+ * `strictCoupon` decides what a coupon that does not apply means. Creating an
+ * order refuses it; a preview carries on without the discount and says why in
+ * `couponError`, so the basket can still be priced while the customer is told.
+ */
+const priceOrder = async ({
+  restaurant,
+  items,
+  deliveryAddress,
+  tip = 0,
+  packagingFee = 0,
+  couponCode = '',
+  useWallet = false,
+  user,
+  userId,
+  strictCoupon = true,
+  quoteWalletCap = false,
+}) => {
+  const { orderItems, subtotal: rawSubtotal } = await buildPricedOrderItems({ restaurant, items });
+  const subtotal = round2(rawSubtotal);
+
+  // Platform fee: 2% of the item total, minimum 8.
+  const platformFee = round2(Math.max(subtotal * 0.02, 8));
+
+  const distancePricing = await computeDistancePricing({ restaurant, deliveryAddress });
+  const deliveryFee = round2(distancePricing.deliveryFee);
+
+  // GST: 5% on the items, 18% on the delivery fee and on the platform fee.
+  const tax = round2(subtotal * 0.05);
+  const deliveryGST = round2(deliveryFee * 0.18);
+  const platformGST = round2(platformFee * 0.18);
+  const gstAndPackaging = round2(tax + deliveryGST + platformGST);
+
+  // Neither may be negative: a negative tip or packaging fee sent by a client
+  // would otherwise come off the total as a discount.
+  const finalTip = round2(Math.max(0, Number(tip) || 0));
+  const finalPackagingFee = round2(
+    Math.max(0, Number(restaurant.dailyPackagingFee || packagingFee || 0))
+  );
+
+  const grossTotal = fromPaise(
+    toPaise(subtotal) +
+      toPaise(gstAndPackaging) +
+      toPaise(platformFee) +
+      toPaise(deliveryFee) +
+      toPaise(finalTip) +
+      toPaise(finalPackagingFee)
+  );
+
+  let couponResult = { couponCode: '', discount: 0, coupon: null };
+  let couponError = null;
+  try {
+    couponResult = await calculateCouponDiscount({
+      couponCode,
+      orderTotal: subtotal,
+      restaurantId: restaurant._id,
+      userId,
+    });
+  } catch (err) {
+    if (strictCoupon || !err.code?.includes?.('COUPON')) throw err;
+    couponError = { code: err.code, message: err.message };
+    couponResult = { couponCode: '', discount: 0, coupon: null };
+  }
+  const discount = round2(couponResult.discount);
+
+  const payableBeforeWallet = fromPaise(toPaise(grossTotal) - toPaise(discount));
+
+  // A preview also says what the wallet could cover, so the checkout screen
+  // can offer it without carrying its own copy of the cap.
+  const wallet = user && (useWallet || quoteWalletCap)
+    ? await computeWalletUsage({ user, payableBeforeWallet })
+    : { walletUsed: 0, spendable: 0, maxWalletPercent: 0 };
+  const walletCap = round2(wallet.walletUsed);
+  const walletUsed = useWallet ? walletCap : 0;
+
+  const total = fromPaise(toPaise(payableBeforeWallet) - toPaise(walletUsed));
+
+  return {
+    orderItems,
+    subtotal,
+    tax,
+    deliveryGST,
+    platformGST,
+    gstAndPackaging,
+    platformFee,
+    deliveryFee,
+    packagingFee: finalPackagingFee,
+    tip: finalTip,
+    grossTotal,
+    couponResult,
+    couponError,
+    discount,
+    payableBeforeWallet,
+    walletCap,
+    walletUsed,
+    total,
+    distancePricing,
+  };
+};
+
 export const previewOrderPricing = async (req, res) => {
   try {
-    const { restaurantId, items = [], deliveryAddress, tip = 0 } = req.body;
+    const {
+      restaurantId,
+      items = [],
+      deliveryAddress,
+      tip = 0,
+      couponCode = '',
+      useWallet = false,
+    } = req.body;
     if (!restaurantId || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ status: 'error', message: 'restaurantId and items are required' });
     }
     const restaurant = await Restaurant.findById(restaurantId);
     if (!restaurant) return res.status(404).json({ status: 'error', message: 'Restaurant not found' });
 
-    const { subtotal } = await buildPricedOrderItems({ restaurant, items });
+    const userId = req.user?._id || req.user?.id;
+    const user = userId ? await User.findById(userId) : null;
 
-    const platformFee = Math.max(subtotal * 0.02, 8);
-    const pricing = await computeDistancePricing({ restaurant, deliveryAddress });
-    const tax = subtotal * 0.05;
-    const deliveryGSTAmount = pricing.deliveryFee * 0.18;
-    const platformGSTAmount = platformFee * 0.18;
-    const gstAndPackaging = tax + deliveryGSTAmount + platformGSTAmount;
+    const bill = await priceOrder({
+      restaurant,
+      items,
+      deliveryAddress,
+      tip,
+      couponCode,
+      useWallet: Boolean(useWallet),
+      user,
+      userId,
+      strictCoupon: false,
+      quoteWalletCap: true,
+    });
     const eta = await computeDynamicEta({
       restaurant,
       userCoordinates: deliveryAddress?.coordinates,
     });
-    const packagingFee = Number(restaurant.dailyPackagingFee || 0);
-    const finalTotal = subtotal + gstAndPackaging + platformFee + pricing.deliveryFee + Number(tip || 0) + packagingFee;
 
     return res.status(200).json({
       status: 'success',
       data: {
-        subtotal: Number(subtotal.toFixed(2)),
-        gst: Number(tax.toFixed(2)),
-        deliveryGST: Number(deliveryGSTAmount.toFixed(2)),
-        platformGST: Number(platformGSTAmount.toFixed(2)),
-        totalGST: Number(gstAndPackaging.toFixed(2)),
-        platformFee: Number(platformFee.toFixed(2)),
-        packagingFee: Number(packagingFee.toFixed(2)),
-        tip: Number(tip || 0),
-        distanceKmUsed: pricing.distanceKmUsed,
-        distanceSource: pricing.distanceSource,
-        deliveryFee: pricing.deliveryFee,
-        deliveryFeeBreakdown: pricing.deliveryFeeBreakdown,
+        subtotal: bill.subtotal,
+        gst: bill.tax,
+        deliveryGST: bill.deliveryGST,
+        platformGST: bill.platformGST,
+        totalGST: bill.gstAndPackaging,
+        platformFee: bill.platformFee,
+        packagingFee: bill.packagingFee,
+        tip: bill.tip,
+        distanceKmUsed: bill.distancePricing.distanceKmUsed,
+        distanceSource: bill.distancePricing.distanceSource,
+        deliveryFee: bill.deliveryFee,
+        deliveryFeeBreakdown: bill.distancePricing.deliveryFeeBreakdown,
         estimatedDeliveryMinutes: eta.estimatedDeliveryMinutes,
         etaSource: eta.etaSource,
         etaBreakdown: eta.etaBreakdown,
-        finalTotal: Number(finalTotal.toFixed(2)),
+        // The bill before any coupon or wallet money comes off it.
+        grossTotal: bill.grossTotal,
+        couponCode: bill.couponResult.couponCode,
+        discount: bill.discount,
+        couponError: bill.couponError,
+        walletUsed: bill.walletUsed,
+        // The most Reditoe Money this bill could take, whether or not it is switched on.
+        walletCap: bill.walletCap,
+        // What the customer pays: the same figure the order will be created at.
+        finalTotal: bill.total,
       },
     });
   } catch (error) {
@@ -611,98 +805,39 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    const { orderItems, subtotal } = await buildPricedOrderItems({ restaurant, items });
-
-    // Calculate platform fee (2% of subtotal, minimum ₹8)
-    const platformFee = Math.max(subtotal * 0.02, 8);
-
-    const distancePricing = await computeDistancePricing({ restaurant, deliveryAddress });
-    const deliveryFee = distancePricing.deliveryFee;
-
-    // Calculate GST: 5% on items, 18% on delivery, 18% on platform fee
-    const tax = subtotal * 0.05;
-    const deliveryGSTAmount = deliveryFee * 0.18;
-    const platformGSTAmount = platformFee * 0.18;
-    const gstAndPackaging = tax + deliveryGSTAmount + platformGSTAmount;
-
-    // Use tip and packaging fee from frontend if provided, otherwise use defaults
-    const finalTip = tip || 0;
-    const finalPackagingFee = Number(restaurant.dailyPackagingFee || packagingFee || 0);
-
-    // Calculate total before wallet deduction
-    const totalBeforeWallet = subtotal + gstAndPackaging + platformFee + deliveryFee + finalTip + finalPackagingFee;
-    const couponResult = await calculateCouponDiscount({
+    /*
+     * The bill comes from the same calculation the checkout screen was quoted
+     * from (see `priceOrder`), so the amount charged, the amount stored and
+     * the amount the admin console prints cannot differ from what was shown.
+     * A coupon that does not apply refuses the order here rather than quietly
+     * dropping the discount the customer was promised.
+     */
+    const bill = await priceOrder({
+      restaurant,
+      items,
+      deliveryAddress,
+      tip,
+      packagingFee,
       couponCode,
-      orderTotal: totalBeforeWallet,
-      restaurantId: restaurant._id,
+      useWallet,
+      user,
       userId,
+      strictCoupon: true,
     });
-
-    // Apply wallet deduction logic if useWallet is true
-    let walletUsed = 0;
-    if (useWallet) {
-      try {
-        // Get actual balance from Wallet collection
-        const userWallet = await Wallet.findOne({
-          userId: user._id
-        });
-        /*
-         * What the customer may actually spend: the balance less anything an
-         * admin has put on hold, and nothing while the wallet is frozen. Held
-         * money is still theirs - it simply cannot be paid with until it is
-         * released - so reading the raw balance here would have let them spend
-         * the very amount that was being withheld.
-         */
-        const rawBalance = Number(userWallet?.balance ?? user.walletBalance ?? 0);
-        const heldAmount = Number(userWallet?.heldAmount ?? 0);
-        const actualBalance = userWallet?.isFrozen
-          ? 0
-          : Math.max(0, rawBalance - heldAmount);
-
-        if (actualBalance > 0) {
-          /**
-           * How much of this order the wallet may cover.
-           *
-           * Ten percent by the client's rule - the wallet is a sweetener on
-           * an order, not a way to pay for one. Read from settings so it can
-           * be changed without a deploy, and enforced here rather than in the
-           * app: a cap the client can edit in a phone is not a cap.
-           */
-          let maxWalletPercent = 10;
-          try {
-            const settings = await Settings.findOne({});
-            if (settings?.walletSettings?.enabled &&
-                settings?.walletSettings?.maxUsagePercentage) {
-              maxWalletPercent =
-                settings.walletSettings.maxUsagePercentage;
-            }
-            // Never more than the whole order, whatever the setting says.
-            maxWalletPercent = Math.min(100, Math.max(0, maxWalletPercent));
-          } catch (e) {
-            console.log('Settings fetch error:', e.message);
-          }
-
-          const maxWalletUsage =
-            totalBeforeWallet * (maxWalletPercent / 100);
-          // Rounded down to whole rupees: a customer paying 49.97 from a
-          // wallet is a rounding argument nobody needs.
-          walletUsed = Math.floor(Math.min(actualBalance, maxWalletUsage));
-
-          console.log('💰 Wallet check:', {
-            actualBalance,
-            maxWalletPercent,
-            maxWalletUsage,
-            walletUsed
-          });
-        }
-      } catch (walletCheckErr) {
-        console.log('Wallet check error:',
-          walletCheckErr.message);
-      }
-    }
-
-    // Calculate final total after wallet deduction. Backend is authoritative.
-    const total = totalBeforeWallet - walletUsed - couponResult.discount;
+    const {
+      orderItems,
+      subtotal,
+      tax,
+      gstAndPackaging,
+      platformFee,
+      deliveryFee,
+      distancePricing,
+      couponResult,
+      walletUsed,
+    } = bill;
+    const finalTip = bill.tip;
+    const finalPackagingFee = bill.packagingFee;
+    const total = bill.total;
 
     // Validate that total is not negative
     if (total < 0) {
@@ -712,7 +847,6 @@ export const createOrder = async (req, res) => {
       });
     }
 
-    // Round total to 2 decimal places for accuracy
     const roundedTotal = Number(total.toFixed(2));
 
     /*

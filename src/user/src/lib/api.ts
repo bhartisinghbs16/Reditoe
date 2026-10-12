@@ -228,38 +228,115 @@ export class ApiError extends Error {
     this.status = status;
     this.code = code;
   }
+
+  /**
+   * Worth asking again, a moment later.
+   *
+   * A connection that dropped, a proxy that was between processes while the
+   * server restarted (502/503/504), or a request that reached a server that
+   * had no handler for it yet - which is what the router's own 404 means, as
+   * opposed to a handler answering "no such restaurant". All of these pass.
+   * A timeout does not count: it has already cost the full wait once.
+   */
+  get transient() {
+    return (
+      this.code === "route_not_found" ||
+      this.code === "unreachable" ||
+      this.status === 502 ||
+      this.status === 503 ||
+      this.status === 504
+    );
+  }
 }
 
+/**
+ * The server's own "nothing matched this path" answer - { message: "Route not
+ * found" } or "API route not found" - as opposed to a handler saying "no such
+ * restaurant". It carries no `code`; every handler's refusal does or is a
+ * different message.
+ */
+const isRouteMiss = (status: number, payload: { message?: string; code?: string }) =>
+  status === 404 && !payload.code && /route not found/i.test(payload.message ?? "");
+
+/** How long to wait before each retry of a read that failed transiently. */
+const RETRY_DELAYS_MS = [700, 2000];
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One call, with a couple of quiet retries for reads.
+ *
+ * Only GETs are repeated - they change nothing, so asking twice is safe, and a
+ * repeated POST could place an order twice. A customer scrolling the home page
+ * was being shown "Route not found" the moment one request landed on a server
+ * that was restarting or an instance that did not have the route yet; asked
+ * again a second later it answered. They never need to hear about that.
+ */
 async function request<T>(
   path: string,
-  options: { method?: string; body?: unknown; auth?: boolean } = {}
+  options: Parameters<typeof requestOnce>[1] = {}
+): Promise<T> {
+  const canRepeat = (options.method ?? "GET") === "GET";
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await requestOnce<T>(path, options);
+    } catch (error) {
+      const again =
+        canRepeat &&
+        attempt < RETRY_DELAYS_MS.length &&
+        error instanceof ApiError &&
+        error.transient;
+      if (!again) throw error;
+      await sleep(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
+async function requestOnce<T>(
+  path: string,
+  options: {
+    method?: string;
+    body?: unknown;
+    /**
+     * A multipart body, for the calls that carry a file. Sent as it is, with no
+     * Content-Type: the runtime has to write that header itself, because it
+     * carries the boundary the parts are separated by.
+     */
+    form?: FormData;
+    auth?: boolean;
+    /** Longer than the default for a photo on a slow connection. */
+    timeoutMs?: number;
+  } = {}
 ): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_MS);
 
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       method: options.method ?? "GET",
       headers: {
-        "Content-Type": "application/json",
+        ...(options.form ? {} : { "Content-Type": "application/json" }),
         ...NGROK_HEADERS,
         ...(options.auth && getAuthToken()
           ? { Authorization: `Bearer ${getAuthToken()}` }
           : {}),
       },
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body: options.form ?? (options.body ? JSON.stringify(options.body) : undefined),
       signal: controller.signal,
     });
   } catch (cause) {
     clearTimeout(timer);
     // A dropped connection, no network, or the request outliving TIMEOUT_MS.
     // Whatever the cause, the customer can only be told the same thing.
+    const timedOut = cause instanceof Error && cause.name === "AbortError";
     throw new ApiError(
-      cause instanceof Error && cause.name === "AbortError"
+      timedOut
         ? "The server took too long to answer. Please try again."
         : "Could not reach the server. Please check your connection and try again.",
-      0
+      0,
+      timedOut ? "timeout" : "unreachable"
     );
   }
 
@@ -286,6 +363,16 @@ async function request<T>(
           response.status
         );
       }
+    }
+
+    if (isRouteMiss(response.status, payload)) {
+      // Never "Route not found": that is the server's wording about itself,
+      // and it tells a customer nothing they can act on.
+      throw new ApiError(
+        "Reditoe is updating. Please try again in a moment.",
+        response.status,
+        "route_not_found"
+      );
     }
 
     if (!response.ok || payload.status === "error") {
@@ -536,6 +623,42 @@ export function toOffer(api: ApiCoupon, index: number): Offer {
 
 /* ── Endpoints ──────────────────────────────────────────────────────────── */
 
+/** A picture chosen on the device, as the image picker reports it. */
+export interface ProfilePhoto {
+  uri: string;
+  /** Falls back to a name made from the type when the picker reports none. */
+  name?: string | null;
+  mimeType?: string | null;
+}
+
+const EXTENSION_FOR: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+/**
+ * Adds a picked image to a multipart body.
+ *
+ * The two platforms want different things in a part. A phone takes an object
+ * with a uri and reads the file itself; a browser has no file to point at, so
+ * the picture is fetched back out of its blob URL and appended as the bytes,
+ * which is the only thing it will serialise as a file rather than as the text
+ * "[object Object]".
+ */
+async function appendPhoto(form: FormData, field: string, photo: ProfilePhoto) {
+  const type = photo.mimeType || "image/jpeg";
+  const name = photo.name || `profile.${EXTENSION_FOR[type] ?? "jpg"}`;
+
+  if (typeof document !== "undefined") {
+    const blob = await (await fetch(photo.uri)).blob();
+    form.append(field, blob, name);
+    return;
+  }
+
+  form.append(field, { uri: photo.uri, name, type } as unknown as Blob);
+}
+
 /** One support conversation, with everything said in it so far. */
 export interface SupportTicket {
   _id: string;
@@ -591,7 +714,11 @@ export interface ApiOrder {
   platformFee?: number;
   deliveryFee?: number;
   packagingFee?: number;
+  tip?: number;
   discount?: number;
+  couponCode?: string;
+  /** Reditoe Money taken off this order. */
+  walletUsed?: number;
   total?: number;
   status?: string;
   paymentMethod?: string;
@@ -844,28 +971,6 @@ export const api = {
     return res.data;
   },
 
-  /**
-   * Finishing signup.
-   *
-   * Registration now ends at a code rather than a session, so these are the
-   * two calls between "account created" and "signed in".
-   */
-  async verifyAccount(emailOrPhone: string, otp: string) {
-    const res = await request<{ token: string; data: { user: unknown } }>(
-      "/auth/verify-account",
-      { method: "POST", body: { emailOrPhone, otp } }
-    );
-    setAuthToken(res.token);
-    return res;
-  },
-
-  async resendVerification(emailOrPhone: string) {
-    return request<{ message?: string; devOtp?: string; channel?: string }>(
-      "/auth/resend-verification",
-      { method: "POST", body: { emailOrPhone } }
-    );
-  },
-
   async me() {
     const res = await request<{
       data: {
@@ -1026,15 +1131,6 @@ export const api = {
     });
   },
 
-  /** Changes the signed-in account's password. */
-  async changePassword(password: string) {
-    return request<{ status: string }>("/auth/set-password", {
-      method: "POST",
-      auth: true,
-      body: { password },
-    });
-  },
-
   async createWalletTopUp(amount: number) {
     return request<{
       data: {
@@ -1155,86 +1251,86 @@ export const api = {
     );
   },
 
-  /** Signs in with an email address or a mobile number — the server reads which. */
-  async login(emailOrPhone: string, password: string) {
-    const res = await request<{ token: string; data: { user: unknown } }>(
-      "/auth/login",
-      { method: "POST", body: { emailOrPhone, password } }
-    );
-    setAuthToken(res.token);
-    return res;
-  },
-
   /**
-   * Creates the account. Does *not* sign in: the server withholds the token
-   * until the emailed or texted code comes back through verifyAccount.
+   * Asks for a sign-in code to be texted to a mobile number.
+   *
+   * There is no password and no email sign-in: a mobile number and the code
+   * sent to it are the only way in. The server answers the same way whether or
+   * not the number has an account - that is for the person who proves they
+   * hold it to find out.
+   *
+   * When the server has no way to send a text (never in production) it hands
+   * the code back as `devOtp`, so the flow can still be completed.
    */
-  async register(name: string, email: string, password: string, phone: string, referralCode?: string) {
+  async sendOtp(phone: string) {
     return request<{
-      verificationRequired?: boolean;
-      channel?: string;
+      message?: string;
       devOtp?: string;
-      message?: string;
-    }>("/auth/register", {
+      data?: { phone?: string; expiresInSeconds?: number; resendAfterSeconds?: number };
+    }>("/auth/send-otp", {
       method: "POST",
-      body: { name, email, password, confirmPassword: password, phone, referralCode: referralCode?.trim() || undefined },
+      body: { phone, role: "user" },
     });
   },
 
   /**
-   * Sends a one-time code to an email address or mobile number.
+   * Checks the code. Two outcomes, told apart by `isNewUser`:
    *
-   * The server returns the code itself when it has no way to deliver it - no
-   * email or SMS provider configured - so the flow can still be completed.
-   * That never happens in production, where an undeliverable code is an
-   * outage and the request fails instead.
-   */
-  async sendOtp(emailOrPhone: string) {
-    return request<{
-      message?: string;
-      otp?: string;
-      data?: { debugOtp?: string };
-    }>('/auth/send-otp', {
-      method: 'POST',
-      body: { emailOrPhone, role: 'user' },
-    });
-  },
-
-  /**
-   * Verifies the code and signs the account in.
+   *  - the number has a customer account: a session, already stored;
+   *  - it does not: no session, but a proof the sign-up screen trades for an
+   *    account. Nothing is created until then.
    *
-   * It does not create anything: a code is only ever sent to an address that
-   * already has an account, so an unknown one is refused at that step rather
-   * than quietly signed up.
-   *
-   * The role is sent so a vendor's or a partner's code cannot open the
+   * The role is sent so a vendor's or a partner's number cannot open the
    * customer app; the server refuses when the account is not a customer.
    */
-  async verifyOtp(emailOrPhone: string, otp: string) {
-    const res = await request<{ token: string; data: { user: unknown } }>(
-      '/auth/verify-otp',
-      { method: 'POST', body: { emailOrPhone, otp, selectedRole: 'user' } }
-    );
-    setAuthToken(res.token);
+  async verifyOtp(phone: string, otp: string) {
+    const res = await request<{
+      isNewUser: boolean;
+      token?: string;
+      phone?: string;
+      phoneProof?: string;
+      data?: { user?: unknown };
+    }>("/auth/verify-otp", {
+      method: "POST",
+      body: { phone, otp, role: "user" },
+    });
+    if (res.token) setAuthToken(res.token);
     return res;
   },
 
-  /** Step one of a password reset: ask for a code. */
-  async forgotPassword(emailOrPhone: string) {
-    return request<{ message?: string; devOtp?: string; channel?: string }>(
-      '/auth/forgot-password',
-      { method: 'POST', body: { emailOrPhone } }
-    );
-  },
+  /**
+   * Creates the account for a number that has just been verified.
+   *
+   * Multipart, because the profile photo travels with the details. The proof is
+   * what the server issued when the code came back: an account is not created
+   * on a number without it. Answers with a session.
+   */
+  async register(input: {
+    name: string;
+    email: string;
+    phone: string;
+    phoneProof: string;
+    /** ISO date, YYYY-MM-DD. */
+    dateOfBirth: string;
+    photo: ProfilePhoto;
+    referralCode?: string;
+  }) {
+    const form = new FormData();
+    form.append("name", input.name);
+    form.append("email", input.email);
+    form.append("phone", input.phone);
+    form.append("phoneProof", input.phoneProof);
+    form.append("dateOfBirth", input.dateOfBirth);
+    if (input.referralCode) form.append("referralCode", input.referralCode);
+    await appendPhoto(form, "profilePhoto", input.photo);
 
-  /** Step two: the code plus the new password. */
-  async resetPassword(emailOrPhone: string, otp: string, password: string) {
-    return request<{ message?: string }>('/auth/reset-password', {
-      method: 'POST',
-      // Sent under both names: the API has accepted either historically, and
-      // guessing wrong fails at the last step of the flow.
-      body: { emailOrPhone, otp, newPassword: password, confirmPassword: password },
+    const res = await request<{ token: string; data: { user: unknown } }>("/auth/register", {
+      method: "POST",
+      form,
+      timeoutMs: 60000,
     });
+    setAuthToken(res.token);
+    return res;
   },
 
   async myOrders() {
@@ -1253,12 +1349,15 @@ export const api = {
    * GST on the delivery and platform fees as well as on the food, a delivery
    * fee that depends on distance - so the customer was quoted one figure on
    * the checkout screen and charged another when the order was created. This
-   * asks the server what it will charge, so the two agree.
+   * asks the server what it will charge, so the two agree - coupon and Reditoe
+   * Money included, which the quote used to leave out.
    */
   async pricingPreview(input: {
     restaurantId: string;
     lines: CartLine[];
     address: DeliveryAddress;
+    couponCode?: string;
+    useWallet?: boolean;
   }) {
     return request<{
       data: {
@@ -1267,6 +1366,17 @@ export const api = {
         platformFee: number;
         packagingFee: number;
         deliveryFee: number;
+        tip?: number;
+        /** The bill before any coupon or Reditoe Money comes off it. */
+        grossTotal?: number;
+        couponCode?: string;
+        discount?: number;
+        /** Set when the code sent does not apply to this basket. */
+        couponError?: { code?: string; message: string } | null;
+        walletUsed?: number;
+        /** The most Reditoe Money this bill could take, switched on or not. */
+        walletCap?: number;
+        /** What the customer pays. */
         finalTotal: number;
         distanceKmUsed?: number;
         distanceSource?: string;
@@ -1280,6 +1390,8 @@ export const api = {
         restaurantId: input.restaurantId,
         items: input.lines.map(orderLine),
         deliveryAddress: input.address,
+        couponCode: input.couponCode ?? "",
+        useWallet: Boolean(input.useWallet),
       },
     });
   },
@@ -1299,7 +1411,7 @@ export const api = {
     // read back rather than invented here so the customer, the vendor, the
     // rider and the admin console all name the same order the same way.
     return request<{
-      data: { order: { _id: string; orderNumber?: string } };
+      data: { order: ApiOrder & { _id: string } };
     }>("/orders/create", {
       method: "POST",
       auth: true,
@@ -1338,7 +1450,17 @@ export const api = {
     return request<{
       success: boolean;
       data: {
+        /** The order's status as the vendor, delivery and admin apps see it. */
         status?: string;
+        /**
+         * Where the customer is told the order is: preparing, picked_up,
+         * on_the_way, completed or cancelled. Worked out by the server from
+         * `status`, so it moves when the vendor, the rider or the admin moves
+         * the order.
+         */
+        stage?: string;
+        /** When each stage began, ISO; null where nothing recorded it. */
+        stageTimes?: Record<string, string | null>;
         riderLocation?: { latitude: number; longitude: number } | null;
         restaurantLocation?: { latitude: number; longitude: number };
         deliveryLocation?: { latitude: number; longitude: number };
@@ -1409,19 +1531,57 @@ export const api = {
 };
 
 /**
- * Loads the whole catalogue: the restaurant list, then each restaurant's menu.
- * A restaurant whose menu fails still appears — a missing menu is better than
- * a missing restaurant.
+ * Runs `work` over every item, at most `limit` at a time, keeping the order.
+ *
+ * The menus used to be asked for all at once - one request per restaurant,
+ * every time the catalogue refreshed. With thirty restaurants that is thirty
+ * connections opened in the same instant, from every phone, every two
+ * minutes, and the server answers a burst like that by dropping some of it.
  */
-export async function loadCatalogue(coordinates?: { latitude: number; longitude: number }): Promise<{
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  work: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await work(items[index]);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+}
+
+/** How many menus are fetched at once. */
+const MENU_CONCURRENCY = 5;
+
+/**
+ * Loads the whole catalogue: the restaurant list, then each restaurant's menu.
+ *
+ * A restaurant whose menu fails still appears — a missing menu is better than
+ * a missing restaurant — and keeps the dishes it had the last time they were
+ * read (`previous`), rather than appearing empty until the next refresh gets
+ * lucky. The list itself is the one call whose failure matters: it throws, and
+ * the caller decides whether to keep what is already on screen.
+ */
+export async function loadCatalogue(
+  coordinates?: { latitude: number; longitude: number },
+  previous: Dish[] = []
+): Promise<{
   restaurants: Restaurant[];
   dishes: Dish[];
 }> {
   const restaurants = await api.restaurants(undefined, coordinates);
-  const menus = await Promise.all(
-    restaurants.map((restaurant) =>
-      api.menu(restaurant.id, coordinates).catch(() => [] as Dish[])
-    )
+  const menus = await mapWithLimit(restaurants, MENU_CONCURRENCY, (restaurant) =>
+    api
+      .menu(restaurant.id, coordinates)
+      .catch(() => previous.filter((dish) => dish.restaurantId === restaurant.id))
   );
   return { restaurants, dishes: menus.flat() };
 }

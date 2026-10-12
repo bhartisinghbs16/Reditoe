@@ -16,7 +16,7 @@ import { HeaderIcon } from "@/components/screen-header";
 import { Photo } from "@/components/photo";
 import { photoUri } from "@/lib/images";
 import { accents, categoryTint, statusFor } from "@/lib/theme";
-import { currency, friendlyDateTime, time } from "@/lib/format";
+import { currency, currencyExact, friendlyDateTime, time } from "@/lib/format";
 import { type PlacedOrder, useStore } from "@/lib/store";
 import { shareReferral } from "@/lib/referral";
 
@@ -113,7 +113,7 @@ function OrderCard({ order, index }: { order: PlacedOrder; index: number }) {
           </Txt>
 
           <View className="mt-1 flex-row items-end justify-between gap-2">
-            <Txt weight="bold">{currency(order.totals.toPay)}</Txt>
+            <Txt weight="bold">{currencyExact(order.totals.toPay)}</Txt>
             <Txt size="tiny" tone={live ? "brand" : "muted"} numberOfLines={1}>
               {closingLine}
             </Txt>

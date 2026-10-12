@@ -20,7 +20,14 @@ import { BillLines } from "@/components/bill";
 import { LiveMap, distanceKm, type Coordinate } from "@/components/live-map";
 import { api } from "@/lib/api";
 import { accents } from "@/lib/theme";
-import { currency, etaFromNow, time } from "@/lib/format";
+import { currency, currencyExact, etaFromNow, time } from "@/lib/format";
+import {
+  ORDER_STAGES,
+  asStage,
+  stageFromStatus,
+  stageIndex as indexOfStage,
+  type TrackedStage,
+} from "@/lib/order-stage";
 import { useStore } from "@/lib/store";
 
 /**
@@ -28,20 +35,16 @@ import { useStore } from "@/lib/store";
  * status pill, the four-stop tracker, the kitchen note, the route map with the
  * rider callout, the rider card, the add-more nudge, a suggestions rail, the
  * order summary and the safety footer.
+ *
+ * The stop the order is on - and so the pill at the top - follows the stage the
+ * server reports on every poll, not the status the order list was holding when
+ * the app opened.
  */
-
-const STAGES = [
-  { key: "Placed", label: "Order Placed", icon: "receipt-outline" as const },
-  { key: "Order Confirmed", label: "Confirmed", icon: "bag-check-outline" as const },
-  { key: "Processing", label: "Picked Up", icon: "restaurant-outline" as const },
-  { key: "OnWay", label: "On the Way", icon: "bicycle-outline" as const },
-  { key: "Delivered", label: "Delivered", icon: "checkmark-circle-outline" as const },
-];
 
 export default function TrackOrderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { orders, restaurantById, restaurants } = useStore();
+  const { orders, restaurantById, restaurants, syncOrderStatus } = useStore();
 
   const order = orders.find((o) => o.id === id);
 
@@ -69,6 +72,10 @@ export default function TrackOrderScreen() {
    * busy for the rest of the day.
    */
   const [track, setTrack] = React.useState<{
+    /** The order's status and stage as the server last reported them. */
+    status?: string;
+    stage?: TrackedStage | null;
+    stageTimes?: Record<string, string | null>;
     rider?: Coordinate | null;
     restaurant?: Coordinate | null;
     destination?: Coordinate | null;
@@ -96,7 +103,13 @@ export default function TrackOrderScreen() {
         const res = await api.orderTracking(order.id);
         if (stopped) return;
         const d = res.data;
+        // Hand the status to the rest of the app too, so the Orders tab does
+        // not go on saying what it said when the app opened.
+        if (d.status) syncOrderStatus(order.id, d.status);
         setTrack({
+          status: d.status,
+          stage: asStage(d.stage),
+          stageTimes: d.stageTimes,
           rider: d.riderLocation ?? null,
           restaurant: d.restaurantLocation ?? null,
           destination: d.deliveryLocation ?? null,
@@ -119,23 +132,87 @@ export default function TrackOrderScreen() {
       stopped = true;
       clearInterval(timer);
     };
-  }, [order.id, finished]);
+  }, [order.id, finished, syncOrderStatus]);
 
   const restaurant = restaurantById(order.restaurantId);
-  const delivered = order.status === "Delivered";
-  const stageIndex = delivered
-    ? STAGES.length - 1
-    : Math.max(0, STAGES.findIndex((s) => s.key === order.status));
 
-  const placedMs = new Date(order.placedAt).getTime();
-  const stages = STAGES.map((stage, index) => ({
-    label: stage.label,
-    icon: stage.icon,
-    time:
-      index <= stageIndex ? time(new Date(placedMs + index * 9 * 60_000)) : undefined,
+  /*
+   * What the order is doing, from the freshest word there is.
+   *
+   * The server's stage when the feed has answered; until then, one read off
+   * the status in the order list. This used to match the list's status against
+   * a table of its own and take the first row when nothing matched, which is
+   * how an order a rider had already collected kept saying it was being
+   * prepared.
+   */
+  const liveStatus = track.status ?? order.status;
+  const stage: TrackedStage = track.stage ?? stageFromStatus(liveStatus);
+  const delivered = stage === "completed";
+  const cancelled = stage === "cancelled";
+  const stageIndex = indexOfStage(stage);
+
+  /*
+   * The time under each stop is when the server recorded it - never one worked
+   * out from when the order was placed, which showed a rider "picked up" at a
+   * moment nothing had happened. A stop with no recorded time shows none.
+   */
+  const stageTime = (key: string, index: number) => {
+    if (index > stageIndex) return undefined;
+    const at = track.stageTimes?.[key] ?? (key === "preparing" ? order.placedAt : null);
+    return at ? time(new Date(at)) : undefined;
+  };
+  const stages = ORDER_STAGES.map((entry, index) => ({
+    label: entry.label,
+    icon: entry.icon,
+    time: stageTime(entry.key, index),
   }));
+  const currentStage = stageIndex >= 0 ? stages[stageIndex] : null;
+  const stageLabel = cancelled ? "Cancelled" : (currentStage?.label ?? "");
 
-  const progress = delivered ? 1 : (stageIndex + 0.5) / STAGES.length;
+  /** The line under the tracker: what is happening, and what comes next. */
+  const kitchenName = restaurant?.name ?? "The restaurant";
+  const note = ((): { icon: keyof typeof Ionicons.glyphMap; title: string; detail: string } => {
+    switch (stage) {
+      case "picked_up":
+        return {
+          icon: "bag-check-outline",
+          title: "Your order has been picked up",
+          detail: `Your delivery partner has collected it from ${kitchenName}.`,
+        };
+      case "on_the_way":
+        return {
+          icon: "bicycle-outline",
+          title: "Your order is on the way",
+          detail: "Your delivery partner is heading to your location.",
+        };
+      case "completed":
+        return {
+          icon: "checkmark-circle-outline",
+          title: "Your order has been delivered",
+          detail: "Enjoy your meal!",
+        };
+      case "cancelled":
+        return {
+          icon: "close-circle-outline",
+          title: "This order was cancelled",
+          detail: "It will not be delivered.",
+        };
+      default:
+        return liveStatus === "Waiting for Confirmation" || liveStatus === "Pending"
+          ? {
+              icon: "storefront-outline",
+              title: `Waiting for ${kitchenName} to confirm`,
+              detail: "We'll update you as soon as they accept your order.",
+            }
+          : {
+              icon: "storefront-outline",
+              title: `${kitchenName} is preparing your order`,
+              detail: "We'll update you when your rider picks it up.",
+            };
+    }
+  })();
+
+  const progress = delivered ? 1 : cancelled ? 0 : (stageIndex + 0.5) / ORDER_STAGES.length;
 
   /**
    * How far the rider still has to come, straight line.
@@ -149,7 +226,7 @@ export default function TrackOrderScreen() {
       ? distanceKm(track.rider, track.destination)
       : null;
 
-  const etaText = delivered ? "Delivered" : etaFromNow(order.etaAt);
+  const etaText = delivered ? "Delivered" : cancelled ? "Cancelled" : etaFromNow(order.etaAt);
 
   /*
    * The rider the API named, or nobody.
@@ -187,23 +264,31 @@ export default function TrackOrderScreen() {
               Estimated Delivery
             </Txt>
             <Txt size="2xl" weight="bold" tone="ok">
-              {delivered ? "Delivered" : etaFromNow(order.etaAt)}
+              {etaText}
             </Txt>
-            <Txt size="tiny" tone="muted">
-              Arriving by{" "}
-              <Txt size="tiny" weight="bold" tone="warn">
-                {time(order.etaAt)}
+            {!delivered && !cancelled && (
+              <Txt size="tiny" tone="muted">
+                Arriving by{" "}
+                <Txt size="tiny" weight="bold" tone="warn">
+                  {time(order.etaAt)}
+                </Txt>
               </Txt>
-            </Txt>
+            )}
           </View>
 
-          <View className="items-center rounded-tile border border-leaf-100 bg-leaf-50 px-3 py-2">
+          {/* The status, in the four words the customer is given. */}
+          <View
+            accessibilityLabel={`Order status: ${stageLabel}`}
+            className="items-center rounded-tile border border-leaf-100 bg-leaf-50 px-3 py-2"
+          >
             <Txt size="tiny" weight="bold" tone="ok" numberOfLines={1}>
-              {stages[stageIndex].label}
+              {stageLabel}
             </Txt>
-            <Txt size="micro" tone="muted">
-              {stages[stageIndex].time}
-            </Txt>
+            {currentStage?.time && (
+              <Txt size="micro" tone="muted">
+                {currentStage.time}
+              </Txt>
+            )}
             <Ionicons name="chevron-down" size={12} color={colors.leaf[600]} />
           </View>
         </Card>
@@ -213,15 +298,15 @@ export default function TrackOrderScreen() {
           <StageTrack stages={stages} currentIndex={stageIndex} />
         </View>
 
-        {/* Kitchen note */}
+        {/* What is happening, and what comes next */}
         <Card className="mx-4 mt-5 flex-row items-center gap-3 p-3">
-          <Ionicons name="storefront-outline" size={24} color={colors.ink.default} />
+          <Ionicons name={note.icon} size={24} color={colors.ink.default} />
           <View className="min-w-0 flex-1">
             <Txt size="sm" weight="bold" numberOfLines={1}>
-              {restaurant?.name} is preparing your order
+              {note.title}
             </Txt>
             <Txt size="tiny" tone="muted">
-              We'll update you when your rider picks it up.
+              {note.detail}
             </Txt>
           </View>
         </Card>
@@ -482,7 +567,7 @@ export default function TrackOrderScreen() {
             <IconTile icon="cash" tint={{ bg: colors.sun[500], fg: "#ffffff" }} size={40} />
             <View className="min-w-0 flex-1">
               <Txt size="sm" weight="bold">
-                Yay! You saved {currency(order.totals.saved)} on this order
+                Yay! You saved {currencyExact(order.totals.saved)} on this order
               </Txt>
               <Txt size="tiny" tone="muted">
                 Thanks for using Reditoe

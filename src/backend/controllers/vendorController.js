@@ -719,9 +719,17 @@ export const updateVendorProfile = async (req, res) => {
       });
     }
 
+    /*
+     * `phone` here is the restaurant's contact number - what customers and
+     * riders ring - and is saved on the restaurant below. It is deliberately not
+     * written to the account: the account's number is how the vendor signs in,
+     * by a code sent to it, and a profile form that saved whatever was typed
+     * would let a vendor put somebody else's number on their account. Whoever
+     * then signed in with that number would land in a stranger's account while
+     * the stranger's own session kept working.
+     */
     if (name) user.name = name;
     if (bio) user.bio = bio;
-    if (phone) user.phone = phone;
     if (location) {
       if (!user.location) user.location = {};
       user.location = location;

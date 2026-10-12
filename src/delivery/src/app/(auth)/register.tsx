@@ -29,9 +29,10 @@ import {
 /**
  * Rider onboarding, in the steps the brief sets out.
  *
- * Credentials are taken on the Sign Up screen and land here as a draft; these
- * are the rest — personal details, where they are based, documents, bank — and
- * the application is submitted at the end.
+ * Who they are is taken on the Sign Up screen, after Login has verified their
+ * mobile number, and lands here as a draft; these are the rest — personal
+ * details, where they are based, documents, bank — and the application is
+ * submitted at the end.
  *
  * Every step writes the draft, so a rider who is interrupted comes back to
  * where they were rather than to an empty form. The account is created by the
@@ -156,12 +157,12 @@ export default function RiderRegister() {
   const [draft, setDraft] = React.useState<RiderDraft | null>(null);
 
   /*
-   * Proof from the server that these two were confirmed. Registration will
-   * not accept the contact details without them, so a tick drawn in the app
-   * on its own gets nowhere.
+   * Proof from the server that the email address was confirmed. Registration
+   * will not accept it without one, so a tick drawn in the app on its own gets
+   * nowhere. The mobile number's proof is already in the draft: it was issued
+   * when the code that brought the rider here came back.
    */
   const [emailProof, setEmailProof] = React.useState<string | null>(null);
-  const [phoneProof, setPhoneProof] = React.useState<string | null>(null);
   const [step, setStep] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -171,8 +172,13 @@ export default function RiderRegister() {
   React.useEffect(() => {
     void (async () => {
       const saved = await loadDraft();
-      if (!saved || !saved.email) {
-        // Nothing to continue — the credentials step has not been done.
+      if (!saved || !saved.phoneProof) {
+        // No verified number: that happens at Login.
+        router.replace("/(auth)/login");
+        return;
+      }
+      if (!saved.email) {
+        // The number is verified but the sign-up page has not been done.
         router.replace("/(auth)/signup");
         return;
       }
@@ -310,11 +316,9 @@ export default function RiderRegister() {
           name: draft.name,
           email: draft.email,
           phone: draft.phone,
-          password: draft.password,
-          confirmPassword: draft.password,
           referralCode: draft.referralCode || undefined,
           emailProof,
-          phoneProof,
+          phoneProof: draft.phoneProof,
 
           // Stored as an ISO date whatever the rider typed.
           dateOfBirth: isoFromDDMMYYYY(draft.dateOfBirth) || undefined,
@@ -414,7 +418,7 @@ export default function RiderRegister() {
               </Txt>
               <Txt size="sm" tone="muted" className="mt-2 text-center">
                 Our team will review it and let you know. You can sign in with your
-                email and password to check where it has got to.
+                mobile number to check where it has got to.
               </Txt>
             </View>
           </Panel>
@@ -437,14 +441,11 @@ export default function RiderRegister() {
   const problem = (() => {
     if (step === 0) {
       /*
-       * Both contact details have to be proved before the rider goes any
-       * further, so a signup cannot be finished against an email address or a
-       * number that belongs to somebody else.
+       * The email address has to be proved before the rider goes any further,
+       * so a signup cannot be finished against one that belongs to somebody
+       * else. The mobile number already was, by signing in with it.
        */
-      if (!emailProof && !phoneProof)
-        return "Verify your email address and mobile number to continue.";
       if (!emailProof) return "Verify your email address to continue.";
-      if (!phoneProof) return "Verify your mobile number to continue.";
       if (!draft.dateOfBirth.trim()) return "Enter your date of birth.";
       if (!isoFromDDMMYYYY(draft.dateOfBirth))
         return "Enter your date of birth as DD/MM/YYYY.";
@@ -521,18 +522,25 @@ export default function RiderRegister() {
               onChangeText={(next) => set("name", next)}
               placeholder="As it appears on your ID"
             />
-            <VerifiedField
-              channel="phone"
-              label="Mobile number"
-              value={draft.phone}
-              onChangeText={(next) => set("phone", next)}
-              placeholder="9123456789"
-              keyboardType="number-pad"
-              role="rider"
-              counterpart={draft.email}
-              proof={phoneProof}
-              onVerified={setPhoneProof}
-            />
+            {/*
+              The number the rider signed in with: verified by the code that
+              brought them here, and not editable - it is what the account is
+              for, and what they will sign in with from now on.
+            */}
+            <View className="mt-3">
+              <Txt size="tiny" tone="muted" className="mb-0.5">
+                Mobile number
+              </Txt>
+              <View className="min-h-12 flex-row items-center gap-2 rounded-tile border border-line bg-surface-sunken px-3 py-3">
+                <Txt weight="semibold" className="flex-1">
+                  +91 {draft.phone}
+                </Txt>
+                <Ionicons name="checkmark-circle" size={16} color={colors.green[600]} />
+                <Txt size="tiny" weight="semibold" className="text-green-600">
+                  Verified
+                </Txt>
+              </View>
+            </View>
             <VerifiedField
               channel="email"
               label="Email"

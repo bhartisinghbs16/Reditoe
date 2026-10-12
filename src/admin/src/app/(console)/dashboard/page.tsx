@@ -191,30 +191,30 @@ export default function DashboardPage() {
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <MetricCard
             label="Total Orders"
-            value={formatNumber(stats?.totalOrders)}
+            value={formatNumber(stats?.totalOrders)}
             icon={ShoppingBag}
-            tone="red"
+            tone="red"
             loading={analytics.isPending}
           />
           <MetricCard
             label="Total Revenue"
-            value={currencyCompact(stats?.totalRevenue)}
+            value={currencyCompact(stats?.totalRevenue)}
             icon={IndianRupee}
-            tone="green"
+            tone="green"
             loading={analytics.isPending}
           />
           <MetricCard
             label="Total Customers"
-            value={formatNumber(stats?.newRegistrations)}
+            value={formatNumber(stats?.newRegistrations)}
             icon={UsersRound}
-            tone="purple"
+            tone="purple"
             loading={analytics.isPending}
           />
           <MetricCard
             label="Active Delivery Partners"
-            value={formatNumber(stats?.activeRiders)}
+            value={formatNumber(stats?.activeRiders)}
             icon={Bike}
-            tone="blue"
+            tone="blue"
             loading={analytics.isPending}
           />
           <MetricCard
@@ -223,9 +223,9 @@ export default function DashboardPage() {
               stats?.averageRating == null
                 ? "—"
                 : stats.averageRating.toFixed(1)
-            }
+            }
             icon={Star}
-            tone="amber"
+            tone="amber"
             loading={analytics.isPending}
           />
         </div>
@@ -326,7 +326,7 @@ export default function DashboardPage() {
                       </p>
                       <div className="mt-0.5 flex items-center justify-between gap-2">
                         <span className="truncate text-[0.6875rem] text-muted-foreground">
-                          {order.items?.length ?? 0} items · {currency(order.total)}
+                          {order.items?.length ?? 0} items · {currency(order.total, true)}
                         </span>
                         <StatusBadge status={order.status} />
                       </div>
@@ -424,7 +424,7 @@ export default function DashboardPage() {
                       <td className="max-w-[9rem] truncate px-3 py-3">{customer?.name}</td>
                       <td className="max-w-[9rem] truncate px-3 py-3">{restaurant?.name}</td>
                       <td data-numeric className="px-3 py-3 whitespace-nowrap">
-                        {currency(order.total)}
+                        {currency(order.total, true)}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap">{order.paymentMethod}</td>
                       <td className="px-3 py-3">
