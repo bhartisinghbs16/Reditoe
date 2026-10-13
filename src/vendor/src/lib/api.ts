@@ -280,8 +280,13 @@ export async function sendOtp(
 export type VerifyResult =
   /** The number has a vendor account: signed in, session stored. */
   | { isNewUser: false; user: SessionUser }
-  /** It does not: nothing exists yet, and this proof is what sign-up trades on. */
-  | { isNewUser: true; phone: string; phoneProof: string };
+  /**
+   * It does not: nothing exists yet, and this proof is what sign-up trades on.
+   * `resume` is set when the number does have an account - one whose sign-up
+   * stopped before the restaurant was saved - and says whose, so the form can
+   * finish it rather than start again.
+   */
+  | { isNewUser: true; phone: string; phoneProof: string; resume?: { name: string; email: string } | null };
 
 /**
  * Exchanges the code for a session - or, for a number nobody has registered, a
@@ -300,7 +305,14 @@ export async function verifyOtp(phone: string, otp: string): Promise<VerifyResul
 
   if (body?.isNewUser) {
     if (!body.phoneProof) throw new ApiError("The server did not confirm that number.", 500);
-    return { isNewUser: true, phone: body.phone ?? phone, phoneProof: body.phoneProof };
+    return {
+      isNewUser: true,
+      phone: body.phone ?? phone,
+      phoneProof: body.phoneProof,
+      resume: body.resumeRegistration
+        ? { name: body.account?.name ?? "", email: body.account?.email ?? "" }
+        : null,
+    };
   }
 
   if (!body?.token) throw new ApiError("Sign-in succeeded but no token was returned.", 500);

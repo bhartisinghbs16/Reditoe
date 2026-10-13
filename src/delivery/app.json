@@ -4,7 +4,7 @@
     "slug": "reditoe-rider",
     "version": "1.0.10",
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "fingerprint"
     },
     "updates": {
       "url": "https://u.expo.dev/468b4a51-23af-47dc-ba77-06caba046518"
@@ -23,7 +23,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.reditoe.deliverypartner",
-      "versionCode": 16,
+      "versionCode": 17,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",

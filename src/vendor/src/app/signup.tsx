@@ -231,6 +231,7 @@ function RestaurantStep({
   setField,
   emailProof,
   setEmailProof,
+  accountEmail,
 }: {
   cuisines: string[];
   toggleCuisine: (name: string) => void;
@@ -239,6 +240,13 @@ function RestaurantStep({
   /** Proof from the server that the email address was confirmed. */
   emailProof: string | null;
   setEmailProof: (proof: string | null) => void;
+  /**
+   * The email already on the account, when this is a vendor finishing a
+   * registration that stopped half way. It is theirs and was verified when the
+   * account was made - a code is never sent to an address an account already
+   * holds - so it is shown, not asked for.
+   */
+  accountEmail?: string | null;
 }) {
   const [locating, setLocating] = React.useState(false);
   const [locationError, setLocationError] = React.useState<string | null>(null);
@@ -434,21 +442,38 @@ function RestaurantStep({
             </Txt>
           </View>
         </View>
-        <VerifiedField
-          channel="email"
-          label="Email ID"
-          placeholder="Enter email ID"
-          icon="mail-outline"
-          keyboardType="email-address"
-          value={form.email}
-          onChangeText={(next) => setField("email", next)}
-          proof={emailProof}
-          onVerified={setEmailProof}
-          className="mt-3"
-        />
+        {accountEmail ? (
+          <View className="mt-3">
+            <FieldLabel label="Email ID" required />
+            <View className="h-12 flex-row items-center gap-2 rounded-tile border border-line bg-surface-sunken px-3">
+              <Ionicons name="mail-outline" size={17} color={colors.ink.faint} />
+              <Txt weight="semibold" className="flex-1" numberOfLines={1}>
+                {accountEmail}
+              </Txt>
+              <Ionicons name="checkmark-circle" size={16} color={colors.ok.default} />
+              <Txt size="tiny" weight="semibold" tone="ok">
+                On your account
+              </Txt>
+            </View>
+          </View>
+        ) : (
+          <VerifiedField
+            channel="email"
+            label="Email ID"
+            placeholder="Enter email ID"
+            icon="mail-outline"
+            keyboardType="email-address"
+            value={form.email}
+            onChangeText={(next) => setField("email", next)}
+            proof={emailProof}
+            onVerified={setEmailProof}
+            className="mt-3"
+          />
+        )}
         <Txt size="micro" tone="muted" className="mt-1.5">
-          The email is verified by a code before the application can be submitted —
-          it and your mobile number are how Reditoe and your customers reach the restaurant.
+          {accountEmail
+            ? "This email is already on your account, so there is nothing to verify."
+            : "The email is verified by a code before the application can be submitted — it and your mobile number are how Reditoe and your customers reach the restaurant."}
         </Txt>
       </Card>
     </View>
@@ -1098,6 +1123,22 @@ export default function VendorSignUp() {
     if (!pendingSignup && !result) router.replace("/login");
   }, [pendingSignup, result, router]);
 
+  /*
+   * Finishing a registration that stopped half way: the account exists, so what
+   * it already knows is filled in, and its email - which cannot be verified
+   * again - is shown rather than asked for.
+   */
+  const resume = pendingSignup?.resume ?? null;
+  const accountEmail = resume?.email ? resume.email : null;
+  React.useEffect(() => {
+    if (!resume) return;
+    setForm((current) => ({
+      ...current,
+      contactPersonName: current.contactPersonName || resume.name,
+      email: accountEmail ?? current.email,
+    }));
+  }, [resume, accountEmail]);
+
   React.useEffect(() => {
     if (typeof params.ref === "string" && params.ref.trim()) {
       setField("referralCode", params.ref.trim().toUpperCase());
@@ -1123,7 +1164,7 @@ export default function VendorSignUp() {
   );
 
   const stepProblem =
-    step === 0 && !emailProof
+    step === 0 && !emailProof && !accountEmail
       ? "Verify the restaurant's email address to continue."
       : step === 1 && missingDocuments.length > 0
       ? missingDocuments.length === 1
@@ -1224,6 +1265,16 @@ export default function VendorSignUp() {
       )}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="px-4 pb-6 pt-3">
+        {step === 0 && resume && (
+          <View className="mb-3">
+            <NoteCard
+              icon="information-circle"
+              tint="amber"
+              title="Finish registering your restaurant"
+              detail="Your number is verified and your account is set up, but your restaurant was never saved. Fill in its details to finish."
+            />
+          </View>
+        )}
         {step === 0 && (
           <RestaurantStep
             cuisines={cuisines}
@@ -1232,6 +1283,7 @@ export default function VendorSignUp() {
             setField={setField}
             emailProof={emailProof}
             setEmailProof={setEmailProof}
+            accountEmail={accountEmail}
           />
         )}
         {step === 1 && (

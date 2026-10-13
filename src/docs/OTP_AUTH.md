@@ -80,6 +80,26 @@ expired; and on the sign-in screen, where typing the remembered number shows **C
 instead of **Send code**. Vendor and delivery apps send no `deviceId` yet, so nothing is
 remembered for them; the endpoints already accept their roles.
 
+## A vendor whose sign-up stopped half way
+
+Vendor registration makes the account first and the restaurant second. If the second step
+fails, the vendor has an account that can sign in and no restaurant, and every vendor screen
+answers "Restaurant not found". Nothing could repair that: sign-in only issued a verified-number
+proof to numbers *nobody* has, and registration needs one.
+
+Now, on the **vendor** app only, `POST /auth/verify-otp` for an existing vendor account with **no
+restaurant** answers like a new number - `isNewUser: true`, `phoneProof`, no token - plus
+`resumeRegistration: true` and `account: { name, email }`. Both vendor apps take that to the
+registration form, pre-filled, and `POST /vendor/register` finishes it **on the same account**.
+
+* The account's own email is not asked to be verified again - a code is never sent to an address an
+  account already holds, so it could not be. It is accepted only when the phone has just been proved
+  and the email is that same account's. A different email still needs its own proof.
+* Only an account with no restaurant qualifies; one that has a restaurant signs in as normal and
+  cannot be used to add a second. Customers' and partners' accounts are never converted to vendors.
+* An account whose email is the platform's placeholder (`…@vendor.reditoe.com`, made when no email was
+  given) is shown with a blank email; a new email cannot be attached to it this way.
+
 ## Removed
 
 `POST /auth/login`, `/auth/google` and `/auth/set-password` answer **410** with a

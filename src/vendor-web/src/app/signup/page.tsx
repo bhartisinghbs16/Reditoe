@@ -120,6 +120,24 @@ export default function SignUpPage() {
   // the number is verified. Not while the request is in flight or once it has
   // succeeded: by then the number has done its job and is deliberately gone.
   const submitted = React.useRef(false);
+
+  /*
+   * Finishing a registration that stopped half way: the account exists, so what
+   * it knows is filled in, and its email - which a code can no longer be sent
+   * to - is shown as verified rather than asked for.
+   */
+  const resume = pendingSignup?.resume ?? null;
+  const accountEmail = resume?.email ? resume.email : null;
+  React.useEffect(() => {
+    if (!resume) return;
+    if (resume.email) setEmail(resume.email);
+    if (resume.name) {
+      setForm((current) =>
+        current.contactPersonName ? current : { ...current, contactPersonName: resume.name }
+      );
+    }
+  }, [resume]);
+
   React.useEffect(() => {
     if (!pendingSignup && !submitted.current && status !== "authenticated") {
       router.replace("/login");
@@ -168,7 +186,7 @@ export default function SignUpPage() {
     event.preventDefault();
     setError(null);
 
-    if (!emailProof) {
+    if (!emailProof && !accountEmail) {
       setError("Verify your email address to continue.");
       return;
     }
@@ -178,7 +196,7 @@ export default function SignUpPage() {
     try {
       await signUp({
         ...form,
-        email: email.trim(),
+        email: (accountEmail ?? email).trim(),
         emailProof,
       });
     } catch (caught) {
@@ -223,6 +241,13 @@ export default function SignUpPage() {
             Create the account and the restaurant together. You can finish the
             menu, documents and bank details afterwards.
           </p>
+
+          {resume && (
+            <p className="mt-3 rounded-lg border border-border bg-muted/50 px-3 py-2 text-[0.8125rem]">
+              Your number is verified and your account is set up, but your restaurant was
+              never saved. Fill in its details to finish.
+            </p>
+          )}
 
           <form onSubmit={submit} className="mt-5 grid gap-4 sm:grid-cols-2">
             {/* The number, as verified. Not editable: it is what the account is for. */}
@@ -285,16 +310,17 @@ export default function SignUpPage() {
                   autoComplete="email"
                   required
                   value={email}
+                  readOnly={Boolean(accountEmail)}
                   onChange={(event) => changeEmail(event.target.value)}
                   placeholder="you@restaurant.com"
                   className={inputClass}
                 />
               </div>
 
-              {emailProof ? (
+              {emailProof || accountEmail ? (
                 <p className="flex items-center gap-1 text-xs font-semibold text-green-600">
                   <BadgeCheck className="size-4" />
-                  Verified
+                  {accountEmail ? "Already on your account" : "Verified"}
                 </p>
               ) : (
                 <div className="space-y-2">
@@ -346,7 +372,7 @@ export default function SignUpPage() {
             <Button
               type="submit"
               className="w-full sm:col-span-2"
-              disabled={pending || !emailProof}
+              disabled={pending || (!emailProof && !accountEmail)}
             >
               {pending && <Loader2 className="size-4 animate-spin" />}
               Create account

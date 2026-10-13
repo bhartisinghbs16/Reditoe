@@ -22,6 +22,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
+import Restaurant from '../models/Restaurant.js';
 import LoginOtp from '../models/LoginOtp.js';
 import { readIdentifier, identifierQuery } from '../utils/identifier.js';
 import { signToken } from '../utils/jwt.js';
@@ -422,6 +423,38 @@ export const verifyOtp = async (req, res) => {
         status: 'error',
         success: false,
         message: 'This account has been suspended. Contact support.',
+      });
+    }
+
+    /*
+     * A vendor whose sign-up stopped before the restaurant was made.
+     *
+     * Registration creates the account and then the restaurant, and the second
+     * step can fail. The account can sign in but there is nothing to sign in to:
+     * every vendor screen answers "restaurant not found". They are treated like
+     * a number nobody has - sent to the registration form with a proof of the
+     * number - except that the form is told whose account it is finishing, so it
+     * can fill in what is already known. No session is issued: there is no
+     * restaurant for one to open, and registration returns it once there is.
+     */
+    if (role === 'vendor' && !(await Restaurant.exists({ owner: user._id }))) {
+      const phoneProof = await issueVerifiedProof('phone', phone);
+      // An address the platform made up for an account that gave none is not
+      // something to show back as theirs.
+      const email = /@vendor\.reditoe\.com$/i.test(user.email || '') ? '' : user.email || '';
+      const account = { name: user.name || '', email };
+      return res.status(200).json({
+        status: 'success',
+        success: true,
+        isNewUser: true,
+        signupRequired: true,
+        resumeRegistration: true,
+        role,
+        phone,
+        phoneProof,
+        account,
+        message: 'Number verified. Finish registering your restaurant to continue.',
+        data: { isNewUser: true, resumeRegistration: true, phone, phoneProof, account },
       });
     }
 

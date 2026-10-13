@@ -23,8 +23,14 @@ module.exports = function withGoogleMapsKey(config) {
      *
      * app.json is committed; the .env files are not. Putting the key in the
      * former would publish it to anyone with the repository.
+     *
+     * GOOGLE_MAPS_API_KEY is the EAS secret the builds use; the EXPO_PUBLIC_
+     * name is what a local .env has always carried. Neither goes through the
+     * app config - see app.config.js for why that matters to over-the-air
+     * updates.
      */
-    const apiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+    const apiKey =
+      process.env.GOOGLE_MAPS_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
     if (!apiKey) {
       // Louder than a silent skip: a build with no key produces a blank map.

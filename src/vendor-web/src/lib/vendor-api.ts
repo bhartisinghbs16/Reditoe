@@ -933,8 +933,12 @@ export async function sendOtp(phone: string) {
 export type VerifyResult =
   /** The number has a vendor account. */
   | { isNewUser: false; token: string; user: VendorUser | null }
-  /** It does not: nothing exists yet, and this proof is what sign-up trades on. */
-  | { isNewUser: true; phone: string; phoneProof: string };
+  /**
+   * It does not: nothing exists yet, and this proof is what sign-up trades on.
+   * `resume` is set when the number does have an account - one whose sign-up
+   * stopped before the restaurant was saved - and says whose.
+   */
+  | { isNewUser: true; phone: string; phoneProof: string; resume?: { name: string; email: string } | null };
 
 /**
  * Exchanges the code for a session - or, for a number nobody has registered, a
@@ -946,6 +950,8 @@ export async function verifyOtp(phone: string, otp: string): Promise<VerifyResul
     token?: string;
     phone?: string;
     phoneProof?: string;
+    resumeRegistration?: boolean;
+    account?: { name?: string; email?: string };
     data?: { user?: VendorUser };
   }>("/auth/verify-otp", {
     method: "POST",
@@ -955,7 +961,14 @@ export async function verifyOtp(phone: string, otp: string): Promise<VerifyResul
 
   if (body.isNewUser) {
     if (!body.phoneProof) throw new ApiError("The server did not confirm that number.", 500);
-    return { isNewUser: true, phone: body.phone ?? phone, phoneProof: body.phoneProof };
+    return {
+      isNewUser: true,
+      phone: body.phone ?? phone,
+      phoneProof: body.phoneProof,
+      resume: body.resumeRegistration
+        ? { name: body.account?.name ?? "", email: body.account?.email ?? "" }
+        : null,
+    };
   }
 
   if (!body.token) throw new ApiError("The server did not return a token.", 500);
@@ -1002,8 +1015,11 @@ export interface VendorSignUpDraft {
   /** The mobile number that was verified by code, and the server's proof of it. */
   phone: string;
   phoneProof: string;
-  /** The server's proof that the emailed code came back. */
-  emailProof: string;
+  /**
+   * The server's proof that the emailed code came back. Not needed by a vendor
+   * finishing a registration on an account that already holds the email.
+   */
+  emailProof?: string | null;
   city: string;
   street?: string;
   zipCode?: string;
@@ -1029,7 +1045,7 @@ export function register(draft: VendorSignUpDraft) {
       email: draft.email.trim(),
       phone: draft.phone.trim(),
       phoneProof: draft.phoneProof,
-      emailProof: draft.emailProof,
+      emailProof: draft.emailProof ?? undefined,
       city: draft.city.trim(),
       street: draft.street?.trim() || undefined,
       zipCode: draft.zipCode?.trim() || undefined,

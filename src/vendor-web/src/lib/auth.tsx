@@ -46,7 +46,12 @@ interface AuthValue {
    * proof the server issued for it. Held in memory only: it is good for one
    * account and nothing is gained by it surviving a reload.
    */
-  pendingSignup: { phone: string; phoneProof: string } | null;
+  pendingSignup: {
+    phone: string;
+    phoneProof: string;
+    /** Set when this number's account exists but has no restaurant yet. */
+    resume?: { name: string; email: string } | null;
+  } | null;
   /** Gives up on signing up, so the next attempt starts from the number again. */
   cancelSignUp: () => void;
   /** Creates the restaurant and the account on the verified number, and signs in. */
@@ -107,10 +112,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const [pendingSignup, setPendingSignup] = React.useState<{
-    phone: string;
-    phoneProof: string;
-  } | null>(null);
+  const [pendingSignup, setPendingSignup] = React.useState<AuthValue["pendingSignup"]>(null);
 
   const requestOtp = React.useCallback((phone: string) => sendOtpRequest(phone), []);
 
@@ -118,7 +120,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await verifyOtpRequest(phone, otp);
 
     if (result.isNewUser) {
-      setPendingSignup({ phone: result.phone, phoneProof: result.phoneProof });
+      setPendingSignup({
+        phone: result.phone,
+        phoneProof: result.phoneProof,
+        resume: result.resume ?? null,
+      });
       return "new" as const;
     }
 
@@ -143,7 +149,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!pendingSignup) {
         throw new ApiError("Verify your mobile number first.", 400);
       }
-      const body = await registerRequest({ ...details, ...pendingSignup });
+      const body = await registerRequest({
+        ...details,
+        phone: pendingSignup.phone,
+        phoneProof: pendingSignup.phoneProof,
+      });
       const token = body.token;
       const account = body.data?.user ?? body.user ?? null;
 

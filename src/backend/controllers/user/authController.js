@@ -358,6 +358,24 @@ const registerCustomer = async (req, res) => {
   }
 };
 
+/**
+ * The vendor account a registration is finishing, or null.
+ *
+ * Sign-up makes the account first and the restaurant second. If the second step
+ * fails the vendor is left with an account that can sign in and nothing to run,
+ * and has to be able to come back and complete it - on the same account, never
+ * a second one. That is only what this recognises: one account holds every
+ * contact detail given, it is a vendor's, and it has no restaurant.
+ */
+const unfinishedVendor = async (conflict) => {
+  if (!conflict || conflict.holders.length !== 1) return null;
+  const [holder] = conflict.holders;
+  if (holder.role !== 'vendor') return null;
+  if (!conflict.asked.every((field) => conflict.fields.includes(field))) return null;
+  if (await Restaurant.exists({ owner: holder._id })) return null;
+  return holder;
+};
+
 export const registerVendor = async (req, res) => {
   try {
     const {
@@ -402,10 +420,22 @@ export const registerVendor = async (req, res) => {
      * instead, and does not come through here.
      */
     if (email || phone) {
-      const [emailOk, phoneOk] = await Promise.all([
+      const [emailProved, phoneOk] = await Promise.all([
         email ? proofHolds('email', email, req.body.emailProof) : Promise.resolve(true),
         phone ? proofHolds('phone', phone, req.body.phoneProof) : Promise.resolve(true),
       ]);
+
+      /*
+       * A vendor finishing a registration that stopped half way is not asked to
+       * verify their own email again. They cannot be: a code is never sent to an
+       * address an account already holds. What is needed instead is that they
+       * have just proved the phone - which is what the account is signed into -
+       * and that the address is that same account's own.
+       */
+      const emailOk =
+        emailProved ||
+        (phoneOk && Boolean(await unfinishedVendor(await findContactHolders({ email, phone }))));
+
       if (!emailOk || !phoneOk) {
         return res.status(400).json({
           success: false,
@@ -467,17 +497,11 @@ export const registerVendor = async (req, res) => {
     let user = null;
     const conflict = await findContactHolders({ email, phone });
     if (conflict) {
-      const [holder] = conflict.holders;
-      const sameAccountFinishing =
-        conflict.holders.length === 1 &&
-        holder.role === 'vendor' &&
-        conflict.asked.every((field) => conflict.fields.includes(field)) &&
-        !(await Restaurant.exists({ owner: holder._id }));
-
-      if (!sameAccountFinishing) {
+      const finishing = await unfinishedVendor(conflict);
+      if (!finishing) {
         return res.status(409).json(alreadyRegisteredBody(conflict));
       }
-      user = await User.findById(holder._id);
+      user = await User.findById(finishing._id);
     }
 
     // Create vendor user if not exists

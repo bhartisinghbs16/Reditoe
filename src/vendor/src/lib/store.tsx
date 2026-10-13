@@ -312,7 +312,12 @@ interface StoreValue {
    * proof the server issued for it. Held in memory only, like the sign-up form
    * it belongs to.
    */
-  pendingSignup: { phone: string; phoneProof: string } | null;
+  pendingSignup: {
+    phone: string;
+    phoneProof: string;
+    /** Set when this number's account exists but has no restaurant yet. */
+    resume?: { name: string; email: string } | null;
+  } | null;
   /** Gives up on signing up, so the next attempt starts from the number again. */
   cancelSignUp: () => void;
   signOut: () => Promise<void>;
@@ -580,16 +585,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     );
   }, [orders, session]);
 
-  const [pendingSignup, setPendingSignup] = useState<{ phone: string; phoneProof: string } | null>(
-    null
-  );
+  const [pendingSignup, setPendingSignup] = useState<StoreValue["pendingSignup"]>(null);
 
   const requestOtp = useCallback((phone: string) => apiSendOtp(phone), []);
 
   const verifyOtp = useCallback(async (phone: string, otp: string) => {
     const result = await apiVerifyOtp(phone, otp);
     if (result.isNewUser) {
-      setPendingSignup({ phone: result.phone, phoneProof: result.phoneProof });
+      setPendingSignup({
+        phone: result.phone,
+        phoneProof: result.phoneProof,
+        resume: result.resume ?? null,
+      });
       return "new" as const;
     }
     setPendingSignup(null);

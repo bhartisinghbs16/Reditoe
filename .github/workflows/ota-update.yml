@@ -1,0 +1,142 @@
+# Publishes an over-the-air update when an app's JavaScript changes on main.
+#
+# Push to main -> every app whose folder changed is bundled here and published to
+# the `preview` channel, the one the installed APKs listen to. Phones fetch it in
+# the background and run it the next time the app is closed and reopened.
+#
+# What it does NOT do: a push never installs anything new on a phone. The
+# runtime version is a fingerprint of the native side (modules, plugins,
+# permissions, eas.json, icons). If a change touches any of that, the update is
+# published for a runtime no installed build has and nobody receives it - make a
+# new `eas build` and install it. JavaScript-only changes need nothing more.
+#
+# One-time setup: add a repository secret named EXPO_TOKEN
+#   (expo.dev -> Account settings -> Access tokens -> create one, then
+#    GitHub -> Settings -> Secrets and variables -> Actions -> New secret).
+#
+# Only the preview channel is published. The production channel talks to
+# https://api.reditoe.com, which does not serve a valid certificate yet, so an
+# update there would ship an app that cannot reach the API. Add a production job
+# once that is fixed.
+name: Publish app updates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/user/**"
+      - "src/vendor/**"
+      - "src/delivery/**"
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Which app to publish"
+        type: choice
+        options: [all, user, vendor, delivery]
+        default: all
+      message:
+        description: "Message shown against the update"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# One publish at a time, in order. A newer push waits for the current one and
+# replaces any older one still queued.
+concurrency:
+  group: ota-updates
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Which apps changed
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.pick.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: pick
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          INPUT_APP: ${{ inputs.app }}
+        run: |
+          set -eu
+          apps=""
+          for app in user vendor delivery; do
+            publish=false
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              if [ "$INPUT_APP" = "all" ] || [ "$INPUT_APP" = "$app" ]; then publish=true; fi
+            elif [ -z "$BEFORE" ] \
+              || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+              || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              # No usable earlier commit (first push, force push): publish all.
+              publish=true
+            elif ! git diff --quiet "$BEFORE" "$SHA" -- "src/$app"; then
+              publish=true
+            fi
+            if [ "$publish" = true ]; then apps="$apps $app"; fi
+          done
+          json=$(printf '%s\n' $apps | jq -R . | jq -sc 'map(select(length > 0))')
+          echo "apps=$json" >> "$GITHUB_OUTPUT"
+          echo "Publishing: $json"
+
+  publish:
+    name: Publish ${{ matrix.app }}
+    needs: plan
+    if: needs.plan.outputs.apps != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        app: ${{ fromJson(needs.plan.outputs.apps) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the Expo token is set
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::The EXPO_TOKEN secret is not set. Create an access token at expo.dev and add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/${{ matrix.app }}/package-lock.json
+
+      - name: Install the app's dependencies
+        working-directory: src/${{ matrix.app }}
+        run: npm ci
+
+      - name: Install the EAS command line
+        run: npm install --global eas-cli
+
+      - name: Publish to the preview channel
+        working-directory: src/${{ matrix.app }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          CI: "1"
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_MESSAGE: ${{ inputs.message }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$INPUT_MESSAGE" ]; then
+            message="$INPUT_MESSAGE"
+          else
+            message="$(git log -1 --format=%s "$SHA")"
+          fi
+          # Plain characters only: the message is passed through a shell.
+          message="$(printf '%s' "$message" | tr -cd 'A-Za-z0-9 .,:;_/#@()+-' | cut -c1-100) (${SHA:0:7})"
+          node ../scripts/ota-update.js preview "$message"

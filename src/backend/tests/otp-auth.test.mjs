@@ -913,3 +913,143 @@ describe('remembering a device', () => {
     assert.equal(await DeviceSession.countDocuments(), 0);
   });
 });
+
+describe('finishing a vendor registration that stopped half way', () => {
+  const PHONE = '+919812345670';
+  const CODE = '123456';
+
+  /* Written straight into the table, for the reason given in the suite above. */
+  const signIn = async (role = 'vendor') => {
+    await LoginOtp.findOneAndUpdate(
+      { phone: PHONE },
+      {
+        phone: PHONE,
+        role,
+        codeHash: await bcrypt.hash(CODE, 4),
+        attempts: 0,
+        sentAt: new Date(),
+        codeExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        windowStartedAt: new Date(),
+        sendsInWindow: 1,
+        expiresAt: new Date(Date.now() + 65 * 60 * 1000),
+      },
+      { upsert: true, new: true }
+    );
+    return request(app).post('/api/auth/verify-otp').send({ phone: '9812345670', otp: CODE, role });
+  };
+
+  /** What sign-up leaves behind when it makes the account and then fails. */
+  const stranded = (overrides = {}) =>
+    User.create({
+      name: 'Priya', email: 'owner@kitchen.example', phone: PHONE,
+      password: 'whatever-1', role: 'vendor', ...overrides,
+    });
+
+  const finish = (fields = {}) =>
+    request(app).post('/api/vendor/register').send({
+      restaurantName: 'Corner Kitchen',
+      contactPersonName: 'Priya',
+      phone: '9812345670',
+      email: 'owner@kitchen.example',
+      city: 'Chennai',
+      street: '12 Anna Salai',
+      zipCode: '600002',
+      ...fields,
+    });
+
+  test('signing in is told to finish registering, gets a proof, and no session', async () => {
+    await stranded();
+    const res = await signIn();
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.isNewUser, true);
+    assert.equal(res.body.resumeRegistration, true);
+    assert.equal(res.body.token, undefined, 'there is no restaurant for a session to open');
+    assert.match(res.body.phoneProof, /^[0-9a-f]{48}$/);
+    assert.deepEqual(res.body.account, { name: 'Priya', email: 'owner@kitchen.example' });
+  });
+
+  test('the registration then completes on the SAME account, with no new email proof', async () => {
+    const owner = await stranded();
+    const { body } = await signIn();
+
+    const res = await finish({ phoneProof: body.phoneProof });
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.ok(res.body.token);
+
+    assert.equal(await User.countDocuments({ role: 'vendor' }), 1, 'no second account');
+    const made = await Restaurant.findOne({ name: 'Corner Kitchen' });
+    assert.equal(String(made.owner), String(owner._id));
+    assert.equal(made.status, 'pending');
+
+    // From here on it is an ordinary vendor: signing in opens the app.
+    const again = await signIn();
+    assert.equal(again.body.isNewUser, false);
+    assert.ok(again.body.token);
+  });
+
+  test('an address the platform made up is not shown back as theirs', async () => {
+    await stranded({ email: 'vendor_9812345670_1700000000000@vendor.reditoe.com' });
+    const res = await signIn();
+    assert.equal(res.body.resumeRegistration, true);
+    assert.equal(res.body.account.email, '');
+  });
+
+  test('a vendor who already has a restaurant is signed in as before', async () => {
+    const owner = await stranded();
+    await Restaurant.create({ name: 'Existing', owner: owner._id });
+    const res = await signIn();
+    assert.equal(res.body.isNewUser, false);
+    assert.equal(res.body.resumeRegistration, undefined);
+    assert.ok(res.body.token);
+  });
+
+  test('a different email is not taken on trust: it still has to be proved', async () => {
+    await stranded();
+    const { body } = await signIn();
+    const res = await finish({ phoneProof: body.phoneProof, email: 'someone.else@example.com' });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'contact_not_verified');
+    assert.equal(await Restaurant.countDocuments(), 0);
+    assert.equal(await User.countDocuments(), 1);
+  });
+
+  test('without the number proved, nothing is waived', async () => {
+    await stranded();
+    const res = await finish();
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'contact_not_verified');
+    assert.equal(await Restaurant.countDocuments(), 0);
+  });
+
+  test('the waiver is only for an account with no restaurant: it cannot add a second', async () => {
+    const owner = await stranded();
+    await Restaurant.create({ name: 'Existing', owner: owner._id });
+    const proof = await issueVerifiedProof('phone', '9812345670');
+
+    const res = await finish({ phoneProof: proof });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'contact_not_verified');
+    assert.equal(await Restaurant.countDocuments(), 1);
+
+    // Even with both proofs, a finished account is simply "already registered".
+    const emailProof = await issueVerifiedProof('email', 'owner@kitchen.example');
+    const both = await finish({ phoneProof: proof, emailProof });
+    assert.equal(both.status, 409);
+    assert.equal(await Restaurant.countDocuments(), 1);
+  });
+
+  test('a customer or a partner on the same number is not turned into a vendor', async () => {
+    await stranded({ role: 'user' });
+    const proof = await issueVerifiedProof('phone', '9812345670');
+    const res = await finish({ phoneProof: proof });
+    assert.equal(res.status, 400);
+    assert.equal(await Restaurant.countDocuments(), 0);
+  });
+
+  test('a suspended account is refused and given no proof', async () => {
+    await stranded({ isBlocked: true });
+    const res = await signIn();
+    assert.equal(res.status, 403);
+    assert.equal(res.body.phoneProof, undefined);
+  });
+});

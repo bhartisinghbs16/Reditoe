@@ -1,0 +1,9 @@
+# One line ending everywhere.
+#
+# The apps' runtime version is a fingerprint, and the fingerprint hashes the
+# CONTENTS of files such as eas.json, google-services.json and the config
+# plugins. On Windows git checks files out with CRLF (core.autocrlf), on the
+# build servers and in CI they are LF - and a single differing byte gives a
+# different hash, so an over-the-air update would be published for a runtime
+# that no installed build has. Forcing LF makes the hash the same everywhere.
+* text=auto eol=lf

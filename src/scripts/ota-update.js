@@ -16,9 +16,12 @@
  * this takes the channel and the API address from the same place and the
  * update always matches the build it is replacing.
  *
- * An update only reaches builds whose runtime version matches. That is the
- * app's `version` in app.json (runtimeVersion policy "appVersion"), so bump
- * it - and rebuild - whenever a native dependency or plugin changes.
+ * An update only reaches builds whose runtime version matches. The policy is
+ * "fingerprint": the runtime version is a hash of everything native about the
+ * app (native modules, config plugins, permissions, eas.json, icons...), worked
+ * out for you. Change any of that and the hash changes, so the update is
+ * published for a runtime no installed build has - build and install again.
+ * Change only JavaScript, and it matches the build already on phones.
  */
 
 const fs = require("fs");
@@ -56,8 +59,11 @@ if (/localhost|127\.0\.0\.1|10\.0\.2\.2/.test(api)) {
   fail(`${api} only answers on this machine - the update would break every phone.`);
 }
 
+// The message goes through a shell on its way to eas. Dollar signs and
+// backticks are the two things a shell would act on inside double quotes.
 const message =
-  messageParts.join(" ").trim() || `OTA ${new Date().toISOString().slice(0, 16)}`;
+  messageParts.join(" ").replace(/[`$]/g, "").trim() ||
+  `OTA ${new Date().toISOString().slice(0, 16)}`;
 
 console.log(`channel : ${channel}`);
 console.log(`api     : ${api}`);

@@ -12,21 +12,19 @@ const base = require("./app.json");
  *
  * Restrict it in the Google console to the app's package name and signing
  * certificate, or anybody who unpacks the APK can spend against it.
+ *
+ * The key is deliberately NOT put into the config returned below. It reaches
+ * the Android manifest through plugins/with-google-maps-key.js, which reads it
+ * from the environment while the app is being built. The runtime version is a
+ * fingerprint of the native side of this config, and a key in the config would
+ * be part of it: the cloud build has the key, a machine or CI job publishing an
+ * over-the-air update does not, so the two would compute different fingerprints
+ * and the update would never reach a single phone.
  */
 module.exports = () => {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? "";
   const baseUrl = process.env.EXPO_BASE_URL;
 
-  const expo = {
-    ...base.expo,
-    android: {
-      ...base.expo.android,
-      config: {
-        ...base.expo.android.config,
-        googleMaps: { apiKey },
-      },
-    },
-  };
+  const expo = { ...base.expo };
 
   if (baseUrl) expo.experiments = { ...expo.experiments, baseUrl };
 
