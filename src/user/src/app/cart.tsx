@@ -288,19 +288,14 @@ export default function CartScreen() {
           </View>
 
           <View className="flex-row items-center gap-3">
-            {/*
-              The food, and only the food. Delivery depends on how far the
-              address is from the restaurant and is not known until one is
-              chosen, so quoting a grand total here meant the number moved
-              between the cart and the payment screen. The cart totals the
-              items; the checkout adds delivery, taxes and fees to them.
-            */}
+            {/* Same figure as Net Payable in the bill above, so the strip never
+                disagrees with it. */}
             <View className="min-w-0 flex-1">
               <Txt size="lg" weight="bold">
-                {currency(totals.itemTotal - totals.discount)}
+                {currencyExact(totals.toPay)}
               </Txt>
               <Txt size="micro" tone="soft">
-                Item total · charges at checkout
+                Net payable · incl. all charges
               </Txt>
             </View>
 
