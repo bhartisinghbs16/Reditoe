@@ -1003,14 +1003,20 @@ export const api = {
    * of.
    */
   async orderChat(orderId: string): Promise<OrderChat> {
-    return request<OrderChat>(`/orders/${orderId}/chat`);
+    // Signed in, and the conversation is inside `data`: without the token the
+    // server answers 401, and without unwrapping the screen read a chat with
+    // no `open` flag and no messages.
+    const res = await request<{ data: OrderChat }>(`/orders/${orderId}/chat`, { auth: true });
+    return res.data;
   },
 
   async sendOrderChat(orderId: string, message: string): Promise<OrderChat> {
-    return request<OrderChat>(`/orders/${orderId}/chat`, {
+    const res = await request<{ data: OrderChat }>(`/orders/${orderId}/chat`, {
       method: 'POST',
+      auth: true,
       body: { message },
     });
+    return res.data;
   },
 
   /* ── Support ───────────────────────────────────────────────────────── */
@@ -1024,17 +1030,20 @@ export const api = {
    * whole thread, and the admin console answers on the other side.
    */
   async supportTickets(): Promise<SupportTicket[]> {
-    const body = await request<{ tickets?: SupportTicket[] } | SupportTicket[]>(
-      '/support/tickets'
-    );
-    return Array.isArray(body) ? body : (body.tickets ?? []);
+    // Every support route is behind `protect`, and the server wraps what it
+    // returns in `data`: a call without the token was refused as signed-out
+    // even for a signed-in customer.
+    const res = await request<{ data?: { tickets?: SupportTicket[] } }>('/support/tickets', {
+      auth: true,
+    });
+    return res.data?.tickets ?? [];
   },
 
   async supportTicket(id: string): Promise<SupportTicket> {
-    const body = await request<{ ticket?: SupportTicket } & SupportTicket>(
-      `/support/tickets/${id}`
-    );
-    return body.ticket ?? body;
+    const res = await request<{ data: { ticket: SupportTicket } }>(`/support/tickets/${id}`, {
+      auth: true,
+    });
+    return res.data.ticket;
   },
 
   async openSupportTicket(input: {
@@ -1043,19 +1052,23 @@ export const api = {
     category?: string;
     orderId?: string;
   }): Promise<SupportTicket> {
-    const body = await request<{ ticket?: SupportTicket } & SupportTicket>(
-      '/support/tickets',
-      { method: 'POST', body: input }
-    );
-    return body.ticket ?? body;
+    const res = await request<{ data: { ticket: SupportTicket } }>('/support/tickets', {
+      method: 'POST',
+      auth: true,
+      body: input,
+    });
+    return res.data.ticket;
   },
 
   async replyToSupportTicket(id: string, message: string): Promise<SupportTicket> {
-    const body = await request<{ ticket?: SupportTicket } & SupportTicket>(
-      `/support/tickets/${id}/message`,
-      { method: 'POST', body: { message } }
-    );
-    return body.ticket ?? body;
+    // The server answers with the message it stored, not the ticket, so the
+    // thread is read again to show it with the reply in place.
+    await request(`/support/tickets/${id}/message`, {
+      method: 'POST',
+      auth: true,
+      body: { message },
+    });
+    return this.supportTicket(id);
   },
 
   async deliveryCode(orderId: string) {
