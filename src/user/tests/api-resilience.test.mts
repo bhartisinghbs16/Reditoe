@@ -148,7 +148,45 @@ describe('other transient failures', () => {
   });
 });
 
+/**
+ * Creating an account sends the profile photo, and Expo's own `fetch` throws
+ * "Unsupported FormDataPart implementation" on the { uri, name, type } a phone's
+ * image picker returns - before anything is sent - which the customer saw as
+ * "Could not reach the server". On a phone that one call goes through
+ * XMLHttpRequest instead; these stand in for it.
+ */
 describe('creating an account', () => {
+  type Sent = { method: string; url: string; headers: Record<string, string>; body: unknown };
+  let sent: Sent[] = [];
+  let answer: { status: number; body?: unknown; fail?: boolean } = { status: 201 };
+
+  class FakeXHR {
+    status = 0;
+    responseText = '';
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    private method = '';
+    private url = '';
+    private headers: Record<string, string> = {};
+    open(method: string, url: string) {
+      this.method = method;
+      this.url = url;
+    }
+    setRequestHeader(name: string, value: string) {
+      this.headers[name] = value;
+    }
+    abort() {}
+    send(body: unknown) {
+      sent.push({ method: this.method, url: this.url, headers: this.headers, body });
+      queueMicrotask(() => {
+        if (answer.fail) return this.onerror?.();
+        this.status = answer.status;
+        this.responseText = JSON.stringify(answer.body ?? {});
+        this.onload?.();
+      });
+    }
+  }
+
   const details = {
     name: 'Aman Patel',
     email: 'aman@example.com',
@@ -157,90 +195,45 @@ describe('creating an account', () => {
     dateOfBirth: '2006-03-18',
     photo: { uri: 'file:///cache/me.jpg', name: 'me.jpg', mimeType: 'image/jpeg' },
   };
-  const created: Reply = {
-    status: 201,
-    body: { status: 'success', token: 'tok', data: { user: { name: 'Aman Patel' } } },
-  };
-  const bodies: unknown[] = [];
 
   beforeEach(() => {
-    bodies.length = 0;
-    handler = null;
+    sent = [];
+    answer = { status: 201, body: { status: 'success', token: 'tok', data: { user: {} } } };
+    (globalThis as any).XMLHttpRequest = FakeXHR;
   });
 
-  /** Answers from `replies` while keeping what was sent, since `fetch` is stubbed. */
-  const record = () => {
-    const stub = (globalThis as any).fetch;
-    (globalThis as any).fetch = async (url: string, init: { body?: unknown }) => {
-      bodies.push(init?.body);
-      return stub(url);
-    };
-    return () => ((globalThis as any).fetch = stub);
-  };
-
-  test('a dropped connection is tried again, and the second go gets through', async () => {
-    const restore = record();
-    try {
-      replies = [new TypeError('Network request failed'), created];
-      const res = await api.register(details);
-      assert.equal(res.token, 'tok');
-      assert.equal(calls.length, 2);
-      assert.notEqual(bodies[0], bodies[1], 'a streamed body is built again, not reused');
-    } finally {
-      restore();
-    }
+  test('goes through XMLHttpRequest, not fetch, and lets the runtime set the boundary', async () => {
+    const res = await api.register(details);
+    assert.equal(res.token, 'tok');
+    assert.equal(calls.length, 0, 'fetch was not used');
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].method, 'POST');
+    assert.match(sent[0].url, /\/auth\/register$/);
+    assert.ok(sent[0].body instanceof FormData);
+    assert.equal(sent[0].headers['Content-Type'], undefined);
   });
 
-  test('keeps trying a few times, then says so', async () => {
-    const dropped = () => new TypeError('Network request failed');
-    replies = [dropped(), dropped(), dropped()];
-    await assert.rejects(
-      () => api.register(details),
-      (error: any) => error.code === 'unreachable'
-    );
-    assert.equal(calls.length, 3);
-  });
-
-  test('a refusal is not repeated and keeps its own words', async () => {
-    replies = [{ status: 409, body: { status: 'error', message: 'That email is already registered.' } }];
+  test('a refusal keeps its own words', async () => {
+    answer = { status: 409, body: { status: 'error', message: 'That email is already registered.' } };
     await assert.rejects(
       () => api.register(details),
       (error: any) => error.status === 409 && /already registered/.test(error.message)
     );
-    assert.equal(calls.length, 1);
   });
 
-  test('when the first try had got through, the repeat is not blamed on the code', async () => {
-    replies = [
-      new TypeError('Network request failed'),
-      {
-        status: 400,
-        body: {
-          status: 'error',
-          code: 'contact_not_verified',
-          message: 'Verify your mobile number with the code we send before signing up.',
-        },
-      },
-    ];
+  test('a dropped connection is still "could not reach the server"', async () => {
+    answer = { status: 0, fail: true };
     await assert.rejects(
       () => api.register(details),
-      (error: any) => error.code === 'may_exist' && /sign in/i.test(error.message)
+      (error: any) => error.code === 'unreachable' && /could not reach the server/i.test(error.message)
     );
-    assert.equal(calls.length, 2);
   });
 
-  test('a code that really was not verified still says so on the first try', async () => {
-    replies = [
-      {
-        status: 400,
-        body: { status: 'error', code: 'contact_not_verified', message: 'Verify your mobile number.' },
-      },
-    ];
-    await assert.rejects(
-      () => api.register(details),
-      (error: any) => error.code === 'contact_not_verified'
-    );
+  test('every other call still uses fetch', async () => {
+    replies = [{ status: 200, body: { status: 'success' } }];
+    await api.sendOtp('9876543210');
     assert.equal(calls.length, 1);
+    assert.equal(sent.length, 0);
   });
 });
 

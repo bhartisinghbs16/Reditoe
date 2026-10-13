@@ -144,9 +144,8 @@ export default function SignUpScreen() {
         allowsEditing: true,
         aspect: [1, 1],
         // The server accepts up to 8 MB; a profile picture does not need
-        // anywhere near that, and a smaller file is a faster sign-up on mobile
-        // data - the photo is shown at a fraction of its size.
-        quality: 0.5,
+        // anywhere near that, and a smaller file is a faster sign-up on mobile data.
+        quality: 0.7,
       };
       const result =
         source === "camera"

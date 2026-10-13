@@ -387,6 +387,58 @@ async function request<T>(
   }
 }
 
+/** The part of a response the caller reads; all `requestOnce` needs from either transport. */
+type Reply = Pick<Response, "ok" | "status" | "text">;
+
+/**
+ * Sends a multipart body from a phone.
+ *
+ * Not `fetch`. Since SDK 53 Expo replaces the global `fetch` with its own, and
+ * that one refuses the one thing this app puts in a multipart body: the
+ * `{ uri, name, type }` a phone's image picker hands back. It throws
+ * "Unsupported FormDataPart implementation" before a single byte is sent - in
+ * about ten milliseconds - and the catch below used to report that as "Could
+ * not reach the server", with nothing reaching the server to show for it.
+ * React Native's own XMLHttpRequest still reads those parts straight off the
+ * disk, so a photo goes through it.
+ */
+function postFormNatively(
+  url: string,
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    form: FormData;
+    signal: AbortSignal;
+  }
+): Promise<Reply> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(init.method, url);
+    for (const [name, value] of Object.entries(init.headers)) xhr.setRequestHeader(name, value);
+
+    xhr.onload = () =>
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        text: async () => xhr.responseText,
+      });
+    xhr.onerror = () => reject(new Error("Network request failed"));
+
+    // The caller's timer aborts the signal; an abort is reported as one, the
+    // way `fetch` reports it, so it is told apart from a dropped connection.
+    const abort = () => {
+      xhr.abort();
+      const aborted = new Error("Aborted");
+      aborted.name = "AbortError";
+      reject(aborted);
+    };
+    if (init.signal.aborted) return abort();
+    init.signal.addEventListener("abort", abort, { once: true });
+
+    xhr.send(init.form);
+  });
+}
+
 async function requestOnce<T>(
   path: string,
   options: {
@@ -406,20 +458,30 @@ async function requestOnce<T>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TIMEOUT_MS);
 
-  let response: Response;
+  const method = options.method ?? "GET";
+  const headers = {
+    ...(options.form ? {} : { "Content-Type": "application/json" }),
+    ...NGROK_HEADERS,
+    ...(options.auth && getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
+  };
+
+  let response: Reply;
   try {
-    response = await fetch(`${API_BASE}${path}`, {
-      method: options.method ?? "GET",
-      headers: {
-        ...(options.form ? {} : { "Content-Type": "application/json" }),
-        ...NGROK_HEADERS,
-        ...(options.auth && getAuthToken()
-          ? { Authorization: `Bearer ${getAuthToken()}` }
-          : {}),
-      },
-      body: options.form ?? (options.body ? JSON.stringify(options.body) : undefined),
-      signal: controller.signal,
-    });
+    // A browser builds its own multipart body, and `fetch` takes it as it is.
+    response =
+      options.form && typeof document === "undefined"
+        ? await postFormNatively(`${API_BASE}${path}`, {
+            method,
+            headers,
+            form: options.form,
+            signal: controller.signal,
+          })
+        : await fetch(`${API_BASE}${path}`, {
+            method,
+            headers,
+            body: options.form ?? (options.body ? JSON.stringify(options.body) : undefined),
+            signal: controller.signal,
+          });
   } catch (cause) {
     clearTimeout(timer);
     // A dropped connection, no network, or the request outliving TIMEOUT_MS.
@@ -1431,68 +1493,26 @@ export const api = {
     photo: ProfilePhoto;
     referralCode?: string;
   }) {
-    const deviceId = await getDeviceId();
+    const form = new FormData();
+    form.append("name", input.name);
+    form.append("email", input.email);
+    form.append("phone", input.phone);
+    form.append("phoneProof", input.phoneProof);
+    form.append("dateOfBirth", input.dateOfBirth);
+    form.append("deviceId", await getDeviceId());
+    if (input.referralCode) form.append("referralCode", input.referralCode);
+    await appendPhoto(form, "profilePhoto", input.photo);
 
-    /*
-     * Built again for every attempt: a multipart body streams the photo off
-     * the disk and can only be sent once.
-     */
-    const send = async () => {
-      const form = new FormData();
-      form.append("name", input.name);
-      form.append("email", input.email);
-      form.append("phone", input.phone);
-      form.append("phoneProof", input.phoneProof);
-      form.append("dateOfBirth", input.dateOfBirth);
-      form.append("deviceId", deviceId);
-      if (input.referralCode) form.append("referralCode", input.referralCode);
-      await appendPhoto(form, "profilePhoto", input.photo);
-
-      return request<{
-        token: string;
-        rememberToken?: string;
-        rememberExpiresAt?: string;
-        data: { user: unknown };
-      }>("/auth/register", {
-        method: "POST",
-        form,
-        timeoutMs: 60000,
-      });
-    };
-
-    /*
-     * A dropped connection is asked again, which `request` only does for reads.
-     *
-     * This is the call that was seen dying as "Could not reach the server"
-     * right after the code was verified on the same phone. The likely cause is
-     * the customer spending a minute on the form: the connection that carried
-     * the code has gone stale by the time the photo goes up, and a body that
-     * has started to stream off the disk cannot be replayed on a fresh one.
-     * Asked again from scratch it goes through.
-     *
-     * Sending it again cannot make a second account. The proof is spent by the
-     * attempt that got through, so a repeat of one that did is refused rather
-     * than creating anything.
-     */
-    let res: Awaited<ReturnType<typeof send>> | undefined;
-    for (let attempt = 0; !res; attempt += 1) {
-      try {
-        res = await send();
-      } catch (error) {
-        if (!(error instanceof ApiError)) throw error;
-
-        if (attempt > 0 && error.code === "contact_not_verified") {
-          // The earlier attempt reached the server and only its answer was lost.
-          throw new ApiError(
-            "Your account may already have been created. Go back and sign in with your mobile number.",
-            error.status,
-            "may_exist"
-          );
-        }
-        if (error.code !== "unreachable" || attempt >= RETRY_DELAYS_MS.length) throw error;
-        await sleep(RETRY_DELAYS_MS[attempt]);
-      }
-    }
+    const res = await request<{
+      token: string;
+      rememberToken?: string;
+      rememberExpiresAt?: string;
+      data: { user: unknown };
+    }>("/auth/register", {
+      method: "POST",
+      form,
+      timeoutMs: 60000,
+    });
     setAuthToken(res.token);
     if (res.rememberToken && res.rememberExpiresAt) {
       await saveRemembered({
