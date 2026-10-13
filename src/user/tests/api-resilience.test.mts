@@ -148,6 +148,102 @@ describe('other transient failures', () => {
   });
 });
 
+describe('creating an account', () => {
+  const details = {
+    name: 'Aman Patel',
+    email: 'aman@example.com',
+    phone: '+916306375483',
+    phoneProof: 'proof',
+    dateOfBirth: '2006-03-18',
+    photo: { uri: 'file:///cache/me.jpg', name: 'me.jpg', mimeType: 'image/jpeg' },
+  };
+  const created: Reply = {
+    status: 201,
+    body: { status: 'success', token: 'tok', data: { user: { name: 'Aman Patel' } } },
+  };
+  const bodies: unknown[] = [];
+
+  beforeEach(() => {
+    bodies.length = 0;
+    handler = null;
+  });
+
+  /** Answers from `replies` while keeping what was sent, since `fetch` is stubbed. */
+  const record = () => {
+    const stub = (globalThis as any).fetch;
+    (globalThis as any).fetch = async (url: string, init: { body?: unknown }) => {
+      bodies.push(init?.body);
+      return stub(url);
+    };
+    return () => ((globalThis as any).fetch = stub);
+  };
+
+  test('a dropped connection is tried again, and the second go gets through', async () => {
+    const restore = record();
+    try {
+      replies = [new TypeError('Network request failed'), created];
+      const res = await api.register(details);
+      assert.equal(res.token, 'tok');
+      assert.equal(calls.length, 2);
+      assert.notEqual(bodies[0], bodies[1], 'a streamed body is built again, not reused');
+    } finally {
+      restore();
+    }
+  });
+
+  test('keeps trying a few times, then says so', async () => {
+    const dropped = () => new TypeError('Network request failed');
+    replies = [dropped(), dropped(), dropped()];
+    await assert.rejects(
+      () => api.register(details),
+      (error: any) => error.code === 'unreachable'
+    );
+    assert.equal(calls.length, 3);
+  });
+
+  test('a refusal is not repeated and keeps its own words', async () => {
+    replies = [{ status: 409, body: { status: 'error', message: 'That email is already registered.' } }];
+    await assert.rejects(
+      () => api.register(details),
+      (error: any) => error.status === 409 && /already registered/.test(error.message)
+    );
+    assert.equal(calls.length, 1);
+  });
+
+  test('when the first try had got through, the repeat is not blamed on the code', async () => {
+    replies = [
+      new TypeError('Network request failed'),
+      {
+        status: 400,
+        body: {
+          status: 'error',
+          code: 'contact_not_verified',
+          message: 'Verify your mobile number with the code we send before signing up.',
+        },
+      },
+    ];
+    await assert.rejects(
+      () => api.register(details),
+      (error: any) => error.code === 'may_exist' && /sign in/i.test(error.message)
+    );
+    assert.equal(calls.length, 2);
+  });
+
+  test('a code that really was not verified still says so on the first try', async () => {
+    replies = [
+      {
+        status: 400,
+        body: { status: 'error', code: 'contact_not_verified', message: 'Verify your mobile number.' },
+      },
+    ];
+    await assert.rejects(
+      () => api.register(details),
+      (error: any) => error.code === 'contact_not_verified'
+    );
+    assert.equal(calls.length, 1);
+  });
+});
+
 describe('loading the catalogue', () => {
   const dish = (restaurantId: string, name: string) =>
     ({ id: `${restaurantId}-${name}`, restaurantId, name, price: 100 }) as any;

@@ -1431,26 +1431,68 @@ export const api = {
     photo: ProfilePhoto;
     referralCode?: string;
   }) {
-    const form = new FormData();
-    form.append("name", input.name);
-    form.append("email", input.email);
-    form.append("phone", input.phone);
-    form.append("phoneProof", input.phoneProof);
-    form.append("dateOfBirth", input.dateOfBirth);
-    form.append("deviceId", await getDeviceId());
-    if (input.referralCode) form.append("referralCode", input.referralCode);
-    await appendPhoto(form, "profilePhoto", input.photo);
+    const deviceId = await getDeviceId();
 
-    const res = await request<{
-      token: string;
-      rememberToken?: string;
-      rememberExpiresAt?: string;
-      data: { user: unknown };
-    }>("/auth/register", {
-      method: "POST",
-      form,
-      timeoutMs: 60000,
-    });
+    /*
+     * Built again for every attempt: a multipart body streams the photo off
+     * the disk and can only be sent once.
+     */
+    const send = async () => {
+      const form = new FormData();
+      form.append("name", input.name);
+      form.append("email", input.email);
+      form.append("phone", input.phone);
+      form.append("phoneProof", input.phoneProof);
+      form.append("dateOfBirth", input.dateOfBirth);
+      form.append("deviceId", deviceId);
+      if (input.referralCode) form.append("referralCode", input.referralCode);
+      await appendPhoto(form, "profilePhoto", input.photo);
+
+      return request<{
+        token: string;
+        rememberToken?: string;
+        rememberExpiresAt?: string;
+        data: { user: unknown };
+      }>("/auth/register", {
+        method: "POST",
+        form,
+        timeoutMs: 60000,
+      });
+    };
+
+    /*
+     * A dropped connection is asked again, which `request` only does for reads.
+     *
+     * This is the call that was seen dying as "Could not reach the server"
+     * right after the code was verified on the same phone. The likely cause is
+     * the customer spending a minute on the form: the connection that carried
+     * the code has gone stale by the time the photo goes up, and a body that
+     * has started to stream off the disk cannot be replayed on a fresh one.
+     * Asked again from scratch it goes through.
+     *
+     * Sending it again cannot make a second account. The proof is spent by the
+     * attempt that got through, so a repeat of one that did is refused rather
+     * than creating anything.
+     */
+    let res: Awaited<ReturnType<typeof send>> | undefined;
+    for (let attempt = 0; !res; attempt += 1) {
+      try {
+        res = await send();
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+
+        if (attempt > 0 && error.code === "contact_not_verified") {
+          // The earlier attempt reached the server and only its answer was lost.
+          throw new ApiError(
+            "Your account may already have been created. Go back and sign in with your mobile number.",
+            error.status,
+            "may_exist"
+          );
+        }
+        if (error.code !== "unreachable" || attempt >= RETRY_DELAYS_MS.length) throw error;
+        await sleep(RETRY_DELAYS_MS[attempt]);
+      }
+    }
     setAuthToken(res.token);
     if (res.rememberToken && res.rememberExpiresAt) {
       await saveRemembered({
