@@ -15,6 +15,7 @@ export function Photo({
   radius = 14,
   tint,
   className = "",
+  onError,
   children,
 }: {
   uri: string;
@@ -23,6 +24,8 @@ export function Photo({
   radius?: number;
   tint?: { bg: string; fg: string };
   className?: string;
+  /** The picture could not be loaded: a dead link, a file that was deleted. */
+  onError?: () => void;
   /** Overlaid content — badges, gradient scrims, prices. */
   children?: React.ReactNode;
 }) {
@@ -42,6 +45,7 @@ export function Photo({
         contentFit="cover"
         transition={220}
         cachePolicy="memory-disk"
+        onError={onError}
       />
       {children}
     </View>

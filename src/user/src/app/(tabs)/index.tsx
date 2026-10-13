@@ -289,9 +289,18 @@ function PromoCarousel() {
    * than leaving a gap at the top of the home screen.
    */
   const { banners: adminBanners } = useStore();
+  /*
+   * Posters whose picture would not load. A poster is only a link to a file on
+   * the server, and the file can be gone - which left a pale empty box at the
+   * top of the home screen in place of the offers. A poster that cannot be
+   * drawn is dropped, and when none can be, the offers below take over.
+   * Keyed by address rather than id, so re-uploading a picture gets a fresh try.
+   */
+  const [failedImages, setFailedImages] = React.useState<string[]>([]);
   const remoteBanners = adminBanners
     .map((banner) => ({ ...banner, imageUri: mediaUrl(banner.imageUrl) }))
-    .filter((banner): banner is typeof banner & { imageUri: string } => Boolean(banner.imageUri));
+    .filter((banner): banner is typeof banner & { imageUri: string } => Boolean(banner.imageUri))
+    .filter((banner) => !failedImages.includes(banner.imageUri));
   const fallbackOffers = offers.slice(0, 4);
   const count = remoteBanners.length > 0 ? remoteBanners.length : fallbackOffers.length;
   const looping = count > 1;
@@ -396,7 +405,16 @@ function PromoCarousel() {
                 style={{ width: cardWidth }}
                 className="active:opacity-90"
               >
-                <Photo uri={imageUri} height={160} radius={14} />
+                <Photo
+                  uri={imageUri}
+                  height={160}
+                  radius={14}
+                  onError={() =>
+                    setFailedImages((current) =>
+                      current.includes(imageUri) ? current : [...current, imageUri]
+                    )
+                  }
+                />
               </Pressable>
               );
             })

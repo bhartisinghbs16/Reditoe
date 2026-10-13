@@ -1,10 +1,10 @@
 import React from "react";
 import { Pressable, View } from "react-native";
-import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "@/components/photo";
 import { CountDot, Txt, colors } from "@/components/ui";
 import { indigoHeader } from "@/lib/theme";
+import { useSafeBack } from "@/lib/navigation";
 
 /**
  * The page bar used by the red screens — Orders Management, Menu Management.
@@ -28,8 +28,8 @@ export function PageBar({
   onNotifications?: () => void;
   right?: React.ReactNode;
 }) {
-  const router = useRouter();
-  const back = () => (onLeading ? onLeading() : router.back());
+  const goBack = useSafeBack();
+  const back = () => (onLeading ? onLeading() : goBack());
 
   return (
     <View className="flex-row items-center gap-3 bg-surface px-4 pb-3 pt-2.5">
@@ -99,7 +99,7 @@ export function IndigoHeader({
   children?: React.ReactNode;
   overlap?: number;
 }) {
-  const router = useRouter();
+  const goBack = useSafeBack();
 
   return (
     <LinearGradient
@@ -111,7 +111,7 @@ export function IndigoHeader({
       <View className="flex-row items-center gap-3">
         {leading !== "none" && (
           <Pressable
-            onPress={() => (onLeading ? onLeading() : router.back())}
+            onPress={() => (onLeading ? onLeading() : goBack())}
             hitSlop={8}
             accessibilityLabel={leading === "back" ? "Go back" : "Open menu"}
             className="active:opacity-60"

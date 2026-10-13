@@ -109,6 +109,8 @@ export default function SignInScreen() {
     signingIn,
     authError,
     authUser,
+    rememberedPhone,
+    signInRemembered,
   } = useStore();
 
   const [phone, setPhone] = React.useState("");
@@ -131,6 +133,8 @@ export default function SignInScreen() {
   }, [resendIn]);
 
   const ready = awaitingCode ? code.trim().length === 6 : isMobile(phone);
+  /** This phone has signed this number in with a code recently and not signed out. */
+  const knownHere = !awaitingCode && isMobile(phone) && rememberedPhone === tenDigits(phone);
 
   /**
    * Where to go once signed in.
@@ -160,6 +164,13 @@ export default function SignInScreen() {
    */
   const sendCode = async () => {
     setNotice(null);
+    // A number this phone already proved with a code goes straight in. If that
+    // is not possible any more (lapsed, revoked, offline) it falls through to
+    // a code like any other number.
+    if (knownHere && (await signInRemembered(tenDigits(phone)))) {
+      leave();
+      return;
+    }
     const res = await requestOtp(tenDigits(phone));
     if (!res.ok) return;
     setAwaitingCode(true);
@@ -305,6 +316,13 @@ export default function SignInScreen() {
             }
           />
 
+          {knownHere && (
+            <Txt size="micro" tone="muted" className="mt-1.5">
+              You&apos;ve signed in with this number on this phone before, so there&apos;s no
+              code to wait for.
+            </Txt>
+          )}
+
           {awaitingCode && (
             <Field
               label="6-digit code"
@@ -356,7 +374,13 @@ export default function SignInScreen() {
             }`}
           >
             <Txt size="lg" weight="bold" tone={ready && !signingIn ? "white" : "faint"}>
-              {signingIn ? "Working…" : awaitingCode ? "Verify and continue" : "Send code"}
+              {signingIn
+                ? "Working…"
+                : awaitingCode
+                  ? "Verify and continue"
+                  : knownHere
+                    ? "Continue"
+                    : "Send code"}
             </Txt>
           </Pressable>
 

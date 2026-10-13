@@ -53,6 +53,33 @@ and the email's own `emailProof`.
 * the code is only ever returned in the response (`devOtp`) outside production, or with `ALLOW_DEBUG_OTP=true`. It is **not** decided from request headers.
 * a number is the account's identity, so no profile form can change it (`PUT /auth/profile`, `completeProfile`, the vendor profile all leave it alone)
 
+## Remember this device (customer app)
+
+After a code signs a phone in - or a new customer finishes signing up - the app
+holds a secret that lets that phone come back **without another code**, within
+tight limits:
+
+* **Short-lived.** It expires `REMEMBER_DEVICE_DAYS` (default **30**) after the code that
+  created it. Using it does not extend it, so a code is needed again after that.
+* **Few.** An account keeps at most `MAX_REMEMBERED_DEVICES` (default **3**) phones; remembering
+  another drops the one used longest ago. Signing in again on the same phone replaces its entry.
+* **Revocable.** Signing out calls `POST /auth/forget-device` and clears the secret on the phone.
+  A suspended account is refused and its remembered phones are deleted on the next attempt.
+* **Not a password.** Only a SHA-256 of the secret is stored (`DeviceSession`); the secret is
+  256 random bits. It is bound to the phone's device id and to the app (role), and a request that
+  names a number must match the account it belongs to.
+
+| Endpoint | Body | Result |
+| --- | --- | --- |
+| `POST /auth/verify-otp` and `POST /auth/register` | + `deviceId` (optional) | response also carries `rememberToken`, `rememberExpiresAt` |
+| `POST /auth/remember-login` | `deviceId`, `rememberToken`, `role`, `phone?` | same shape as a verified sign-in, or **401** `remember_invalid` (one answer for every reason) |
+| `POST /auth/forget-device` | `deviceId`, `rememberToken` | always **200** |
+
+The customer app uses it three ways: on launch when the week-long session token is gone or
+expired; and on the sign-in screen, where typing the remembered number shows **Continue**
+instead of **Send code**. Vendor and delivery apps send no `deviceId` yet, so nothing is
+remembered for them; the endpoints already accept their roles.
+
 ## Removed
 
 `POST /auth/login`, `/auth/google` and `/auth/set-password` answer **410** with a
@@ -77,6 +104,6 @@ calls them.
 ## Tests
 
 ```bash
-cd backend && npm run test:auth   # 39 integration tests on an in-memory MongoDB, SMS stubbed
+cd backend && npm run test:auth   # integration tests on an in-memory MongoDB, SMS stubbed (includes remember-device)
 cd user    && npm run test:api    # retry / fallback behaviour of the customer app's API client
 ```

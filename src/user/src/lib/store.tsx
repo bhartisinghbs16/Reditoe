@@ -294,6 +294,16 @@ interface StoreValue {
     referralCode?: string;
   }) => Promise<boolean>;
   signOut: () => void;
+  /**
+   * The number this phone was remembered for - signed in with a code here
+   * recently, and not signed out since - or null.
+   */
+  rememberedPhone: string | null;
+  /**
+   * Signs the remembered number back in without a code. False when that is not
+   * possible (lapsed, revoked, no connection), in which case a code is the way.
+   */
+  signInRemembered: (phone: string) => Promise<boolean>;
 
   /** Populated once signed in; null while anonymous. */
   wallet: {
@@ -613,6 +623,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [codEnabled, setCodEnabled] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
+  const [rememberedPhone, setRememberedPhone] = useState<string | null>(null);
+  const refreshRemembered = useCallback(() => {
+    void api
+      .rememberedPhone()
+      .then(setRememberedPhone)
+      .catch(() => {});
+  }, []);
   const [wallet, setWallet] = useState<StoreValue["wallet"]>(null);
   const [walletTransactions, setWalletTransactions] = useState<StoreValue["walletTransactions"]>([]);
   const [membershipInfo, setMembershipInfo] = useState<StoreValue["membershipInfo"]>(null);
@@ -650,12 +667,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
+    /**
+     * Back in without a code, if this phone was signed in with one recently and
+     * not signed out since. A dead connection is not an answer: the phone stays
+     * remembered and the sign-in screen offers it again.
+     */
+    const viaRememberedDevice = async () => {
+      try {
+        const res = await api.rememberedLogin();
+        if (!res || cancelled) return false;
+        await afterAuth(res);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     // Reading storage is asynchronous on a phone, so the token has to be
     // fetched before anything can conclude that nobody is signed in.
-    hydrateAuthToken().then((stored) => {
+    hydrateAuthToken().then(async (stored) => {
       if (cancelled) return;
       if (!stored) {
-        setAuthReady(true);
+        await viaRememberedDevice();
+        if (!cancelled) setAuthReady(true);
+        refreshRemembered();
         return;
       }
 
@@ -667,14 +702,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           setAuthUser(toAuthUser(user));
           setCodEnabled(user?.codEnabled === true);
         })
-        .catch(() => {
+        .catch(async () => {
           if (cancelled) return;
           setAuthToken(null);
+          // The session token lasts a week; a remembered phone outlasts it.
+          const back = await viaRememberedDevice();
+          if (cancelled || back) return;
           setToken(null);
           setAuthUser(null);
         })
         .finally(() => {
           if (!cancelled) setAuthReady(true);
+          refreshRemembered();
         });
     });
 
@@ -1164,6 +1203,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           return "new";
         }
         await afterAuth(res as { token: string; data: { user: unknown } });
+        refreshRemembered();
         return "signed-in";
       } catch (error) {
         setAuthError(error instanceof Error ? error.message : "That code was not accepted");
@@ -1172,7 +1212,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setSigningIn(false);
       }
     },
-    [afterAuth]
+    [afterAuth, refreshRemembered]
   );
 
   const cancelSignUp = useCallback(() => {
@@ -1180,6 +1220,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setPendingSignup(null);
     setAuthError(null);
   }, []);
+
+  const signInRemembered = useCallback<StoreValue["signInRemembered"]>(
+    async (phone) => {
+      setAuthError(null);
+      setSigningIn(true);
+      try {
+        const res = await api.rememberedLogin(phone);
+        if (!res) return false;
+        await afterAuth(res);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        setSigningIn(false);
+        refreshRemembered();
+      }
+    },
+    [afterAuth, refreshRemembered]
+  );
 
   const completeSignUp = useCallback<StoreValue["completeSignUp"]>(
     async (input) => {
@@ -1201,6 +1260,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         await afterAuth(result);
         signupProof.current = null;
         setPendingSignup(null);
+        refreshRemembered();
         return true;
       } catch (error) {
         setAuthError(error instanceof Error ? error.message : "Could not create your account");
@@ -1209,13 +1269,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setSigningIn(false);
       }
     },
-    [afterAuth]
+    [afterAuth, refreshRemembered]
   );
 
   const signOut = useCallback(() => {
     // Before the token goes, so this phone stops receiving this customer's
     // order updates the moment they sign out of it.
     void unregisterForPush();
+    // Signing out means signing out: this phone is forgotten too, so typing the
+    // number again asks for a code rather than walking back in.
+    void api.forgetDevice().finally(() => setRememberedPhone(null));
     setAuthToken(null);
     setToken(null);
     setAuthUser(null);
@@ -1762,6 +1825,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelSignUp,
       completeSignUp,
       signOut,
+      rememberedPhone,
+      signInRemembered,
       wallet,
       walletTransactions,
       membershipInfo,
@@ -1844,6 +1909,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelSignUp,
       completeSignUp,
       signOut,
+      rememberedPhone,
+      signInRemembered,
       wallet,
       walletTransactions,
       membershipInfo,

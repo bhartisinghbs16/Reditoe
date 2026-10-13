@@ -31,6 +31,7 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'reditoe-otp-test-'));
 process.chdir(scratch);
 
 const { default: express } = await import('express');
+const { default: bcrypt } = await import('bcryptjs');
 const { default: request } = await import('supertest');
 const { default: mongoose } = await import('mongoose');
 const { default: axios } = await import('axios');
@@ -46,6 +47,7 @@ const { default: cloudStorage } = await import('../services/cloudStorageService.
 const { default: User } = await import('../models/User.js');
 const { default: LoginOtp } = await import('../models/LoginOtp.js');
 const { default: SignupVerification } = await import('../models/SignupVerification.js');
+const { default: DeviceSession } = await import('../models/DeviceSession.js');
 const { default: Restaurant } = await import('../models/Restaurant.js');
 
 /** Every message the SMS provider was asked to carry, newest last. */
@@ -85,7 +87,12 @@ let mongo;
 before(async () => {
   mongo = await MongoMemoryServer.create();
   await mongoose.connect(mongo.getUri('reditoe_test'));
-  await Promise.all([User.init(), LoginOtp.init(), SignupVerification.init()]);
+  await Promise.all([
+    User.init(),
+    LoginOtp.init(),
+    SignupVerification.init(),
+    DeviceSession.init(),
+  ]);
 });
 
 after(async () => {
@@ -104,6 +111,7 @@ beforeEach(async () => {
     User.deleteMany({}),
     LoginOtp.deleteMany({}),
     SignupVerification.deleteMany({}),
+    DeviceSession.deleteMany({}),
     Restaurant.deleteMany({}),
   ]);
 });
@@ -676,5 +684,232 @@ describe('signing up as a vendor or a delivery partner', () => {
     assert.equal(res.status, 400);
     assert.equal(res.body.code, 'contact_not_verified');
     assert.equal(await User.countDocuments(), 0);
+  });
+});
+
+describe('remembering a device', () => {
+  const PHONE = '+919876543210';
+  const asha = (overrides = {}) =>
+    User.create({
+      name: 'Asha', email: 'asha@example.com', phone: PHONE,
+      password: 'whatever-1', role: 'user', ...overrides,
+    });
+
+  /*
+   * The code is written straight into the table rather than asked for through
+   * /send-otp: this suite shares one network address, and the per-network send
+   * limit (which is itself under test above) would otherwise run out part way
+   * through. Verifying it still goes through the real endpoint.
+   */
+  const CODE = '123456';
+  const plantCode = async (role) =>
+    LoginOtp.findOneAndUpdate(
+      { phone: PHONE },
+      {
+        phone: PHONE,
+        role,
+        codeHash: await bcrypt.hash(CODE, 4),
+        attempts: 0,
+        sentAt: new Date(),
+        codeExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        windowStartedAt: new Date(),
+        sendsInWindow: 1,
+        expiresAt: new Date(Date.now() + 65 * 60 * 1000),
+      },
+      { upsert: true, new: true }
+    );
+
+  /** Signs in with a code, telling the server which phone this is. */
+  const signInOn = async (deviceId, role = 'user') => {
+    await plantCode(role);
+    return request(app)
+      .post('/api/auth/verify-otp')
+      .send({ phone: '9876543210', otp: CODE, role, deviceId });
+  };
+
+  const comeBack = (deviceId, rememberToken, extra = {}) =>
+    request(app).post('/api/auth/remember-login').send({ deviceId, rememberToken, role: 'user', ...extra });
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const deviceA = 'device-aaaaaaaaaaaaaaaa';
+  const deviceB = 'device-bbbbbbbbbbbbbbbb';
+  const deviceC = 'device-cccccccccccccccc';
+  const deviceD = 'device-dddddddddddddddd';
+
+  test('a code that signs in with a device id also remembers the phone, as a hash', async () => {
+    await asha();
+    const res = await signInOn(deviceA);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.ok(res.body.token);
+    assert.ok(res.body.rememberToken && res.body.rememberToken.length >= 40);
+
+    const days = (new Date(res.body.rememberExpiresAt).getTime() - Date.now()) / DAY;
+    assert.ok(days > 29 && days <= 30, `expires in ${days} days`);
+
+    const row = await DeviceSession.findOne({ deviceId: deviceA });
+    assert.ok(row);
+    assert.notEqual(row.secretHash, res.body.rememberToken);
+    assert.ok(!JSON.stringify(row.toObject()).includes(res.body.rememberToken));
+  });
+
+  test('without a device id nothing is remembered', async () => {
+    await asha();
+    const res = await signInOn(undefined);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.rememberToken, undefined);
+    assert.equal(await DeviceSession.countDocuments(), 0);
+
+    const junk = await signInOn('short');
+    assert.equal(junk.body.rememberToken, undefined);
+    assert.equal(await DeviceSession.countDocuments(), 0);
+  });
+
+  test('a remembered phone is signed in again with no code', async () => {
+    await asha();
+    const first = await signInOn(deviceA);
+    const smsBefore = sms.length;
+
+    const back = await comeBack(deviceA, first.body.rememberToken, { phone: '98765 43210' });
+    assert.equal(back.status, 200, JSON.stringify(back.body));
+    assert.equal(back.body.isNewUser, false);
+    assert.equal(back.body.data.user.email, 'asha@example.com');
+    assert.equal(sms.length, smsBefore, 'no code should be sent');
+
+    // The session it hands out is a real one.
+    const me = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${back.body.token}`);
+    assert.equal(me.status, 200);
+  });
+
+  test('the secret is only good on the phone it was issued to, for the app it was issued to', async () => {
+    await asha();
+    const first = await signInOn(deviceA);
+    const secret = first.body.rememberToken;
+
+    assert.equal((await comeBack(deviceB, secret)).status, 401, 'another phone');
+    assert.equal((await comeBack(deviceA, secret.slice(0, -1) + 'x')).status, 401, 'wrong secret');
+    assert.equal((await comeBack(deviceA, '')).status, 401, 'no secret');
+    assert.equal((await comeBack(deviceA, secret, { role: 'vendor' })).status, 401, 'another app');
+    assert.equal((await comeBack(deviceA, secret, { role: 'admin' })).status, 401, 'not an app');
+    assert.equal((await comeBack(deviceA, secret, { phone: '9123456780' })).status, 401, 'another number');
+
+    // None of that spent it.
+    assert.equal((await comeBack(deviceA, secret)).status, 200);
+  });
+
+  test('it expires on a fixed date, and using it does not extend that date', async () => {
+    await asha();
+    const first = await signInOn(deviceA);
+    const before = (await DeviceSession.findOne({ deviceId: deviceA })).expiresAt.getTime();
+
+    assert.equal((await comeBack(deviceA, first.body.rememberToken)).status, 200);
+    const after = (await DeviceSession.findOne({ deviceId: deviceA })).expiresAt.getTime();
+    assert.equal(after, before, 'coming back must not push the date out');
+
+    await DeviceSession.updateOne({ deviceId: deviceA }, { expiresAt: new Date(Date.now() - 1000) });
+    const lapsed = await comeBack(deviceA, first.body.rememberToken);
+    assert.equal(lapsed.status, 401);
+    assert.equal(lapsed.body.code, 'remember_invalid');
+  });
+
+  test('signing in again on the same phone replaces what it held', async () => {
+    await asha();
+    const first = await signInOn(deviceA);
+    const second = await signInOn(deviceA);
+    assert.equal(await DeviceSession.countDocuments(), 1);
+    assert.equal((await comeBack(deviceA, first.body.rememberToken)).status, 401);
+    assert.equal((await comeBack(deviceA, second.body.rememberToken)).status, 200);
+  });
+
+  test('an account keeps only three phones; the one used longest ago is dropped', async () => {
+    await asha();
+    const a = await signInOn(deviceA);
+    const b = await signInOn(deviceB);
+    const c = await signInOn(deviceC);
+
+    // Phone A is used, so B is now the one that has gone longest.
+    assert.equal((await comeBack(deviceA, a.body.rememberToken)).status, 200);
+
+    const d = await signInOn(deviceD);
+    assert.equal(await DeviceSession.countDocuments(), 3);
+
+    assert.equal((await comeBack(deviceB, b.body.rememberToken)).status, 401, 'B was evicted');
+    assert.equal((await comeBack(deviceA, a.body.rememberToken)).status, 200);
+    assert.equal((await comeBack(deviceC, c.body.rememberToken)).status, 200);
+    assert.equal((await comeBack(deviceD, d.body.rememberToken)).status, 200);
+  });
+
+  test('the limits can be tightened from the environment', async () => {
+    await asha();
+    process.env.MAX_REMEMBERED_DEVICES = '1';
+    process.env.REMEMBER_DEVICE_DAYS = '2';
+    try {
+      const a = await signInOn(deviceA);
+      const days = (new Date(a.body.rememberExpiresAt).getTime() - Date.now()) / DAY;
+      assert.ok(days > 1.9 && days <= 2, `expires in ${days} days`);
+
+      await signInOn(deviceB);
+      assert.equal(await DeviceSession.countDocuments(), 1);
+      assert.equal((await comeBack(deviceA, a.body.rememberToken)).status, 401);
+    } finally {
+      delete process.env.MAX_REMEMBERED_DEVICES;
+      delete process.env.REMEMBER_DEVICE_DAYS;
+    }
+  });
+
+  test('a suspended account is refused, and its remembered phone is forgotten', async () => {
+    const user = await asha();
+    const first = await signInOn(deviceA);
+    await User.updateOne({ _id: user._id }, { isBlocked: true });
+
+    const res = await comeBack(deviceA, first.body.rememberToken);
+    assert.equal(res.status, 401);
+    assert.equal(res.body.token, undefined);
+    assert.equal(await DeviceSession.countDocuments(), 0);
+  });
+
+  test('signing out revokes it, and says nothing about whether the secret was good', async () => {
+    await asha();
+    const first = await signInOn(deviceA);
+
+    const out = await request(app)
+      .post('/api/auth/forget-device')
+      .send({ deviceId: deviceA, rememberToken: first.body.rememberToken });
+    assert.equal(out.status, 200);
+    assert.equal(await DeviceSession.countDocuments(), 0);
+    assert.equal((await comeBack(deviceA, first.body.rememberToken)).status, 401);
+
+    const junk = await request(app)
+      .post('/api/auth/forget-device')
+      .send({ deviceId: deviceA, rememberToken: 'not-a-secret-at-all' });
+    assert.equal(junk.status, 200);
+  });
+
+  test('forgetting one phone leaves the others alone', async () => {
+    await asha();
+    const a = await signInOn(deviceA);
+    const b = await signInOn(deviceB);
+    await request(app)
+      .post('/api/auth/forget-device')
+      .send({ deviceId: deviceA, rememberToken: a.body.rememberToken });
+    assert.equal((await comeBack(deviceB, b.body.rememberToken)).status, 200);
+  });
+
+  test('a new customer is remembered as soon as the account exists', async () => {
+    const proof = await issueVerifiedProof('phone', PHONE);
+    const res = await signUp(customer(proof, { deviceId: deviceA }));
+    assert.equal(res.status, 201, JSON.stringify(res.body));
+    assert.ok(res.body.rememberToken);
+
+    const back = await comeBack(deviceA, res.body.rememberToken);
+    assert.equal(back.status, 200);
+    assert.equal(back.body.data.user.email, 'asha@example.com');
+  });
+
+  test('a sign-up without a device id still works, and remembers nothing', async () => {
+    const proof = await issueVerifiedProof('phone', PHONE);
+    const res = await signUp(customer(proof));
+    assert.equal(res.status, 201);
+    assert.equal(res.body.rememberToken, undefined);
+    assert.equal(await DeviceSession.countDocuments(), 0);
   });
 });

@@ -12,6 +12,7 @@ import {
 import Restaurant from '../../models/Restaurant.js';
 import { proofHolds, releaseProof } from '../signupVerificationController.js';
 import { accountPayload } from '../otpAuthController.js';
+import { rememberDevice } from '../../services/deviceSessionService.js';
 import crypto from 'crypto';
 import fs from 'fs';
 import { signToken } from '../../utils/jwt.js';
@@ -328,10 +329,19 @@ const registerCustomer = async (req, res) => {
     // number is refused above anyway; the proof has nothing left to do.
     await releaseProof('phone', phoneId.value).catch(() => {});
 
+    // The number was proved a moment ago, so this phone is remembered the
+    // same way a returning customer's would be - if the app asked.
+    const remembered = await rememberDevice({
+      userId: user._id,
+      role: 'user',
+      deviceId: req.body?.deviceId,
+    }).catch(() => null);
+
     return res.status(201).json({
       status: 'success',
       token: signToken(user._id),
       data: { user: accountPayload(user) },
+      ...(remembered ?? {}),
     });
   } catch (error) {
     /**

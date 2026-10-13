@@ -252,9 +252,10 @@ export default function VendorMore() {
               {
                 text: "Log out",
                 style: "destructive",
-                onPress: () => {
-                  void signOut();
-                  router.replace("/signin");
+                onPress: async () => {
+                  // Wait for the session to clear, then go to the real login route.
+                  await signOut();
+                  router.replace("/login");
                 },
               },
             ])

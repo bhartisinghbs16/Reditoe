@@ -19,7 +19,12 @@ import {
   emailStatus,
   serviceStatus,
 } from '../controllers/user/authController.js';
-import { sendOtp, verifyOtp } from '../controllers/otpAuthController.js';
+import {
+  sendOtp,
+  verifyOtp,
+  rememberLogin,
+  forgetThisDevice,
+} from '../controllers/otpAuthController.js';
 import rateLimit from 'express-rate-limit';
 import { sendEmail } from '../services/emailService.js';
 import { protect } from '../middleware/auth.js';
@@ -76,6 +81,11 @@ const perNetwork = (max) =>
  */
 router.post('/send-otp', perNetwork(60), sendOtp);
 router.post('/verify-otp', perNetwork(120), verifyOtp);
+
+// A phone that has already proved its number comes back without a code, for a
+// limited time and a limited number of phones (see deviceSessionService).
+router.post('/remember-login', perNetwork(120), rememberLogin);
+router.post('/forget-device', perNetwork(120), forgetThisDevice);
 
 // Creating a customer account, with the proof from verify-otp. Multipart: the
 // profile photo travels with the details.

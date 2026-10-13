@@ -1046,6 +1046,7 @@ function CompleteStep({
 
 export default function VendorSignUp() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ ref?: string }>();
   const { pendingSignup, cancelSignUp } = useStore();
   const [step, setStep] = React.useState(0);
   const [cuisines, setCuisines] = React.useState<string[]>(["North Indian"]);
@@ -1130,6 +1131,12 @@ export default function VendorSignUp() {
         : `Still to upload: ${missingDocuments.map((doc) => doc.label).join(", ")}.`
       : null;
 
+  /** Back out of sign-up: forget the verified number and return to Login. */
+  const leaveSignUp = () => {
+    cancelSignUp();
+    router.replace("/login");
+  };
+
   const complete = step === 4;
   const review = step === 3;
 
@@ -1194,6 +1201,7 @@ export default function VendorSignUp() {
         <PageBar
           title="Vendor Sign Up"
           leading="back"
+          onLeading={leaveSignUp}
           right={
             <View className="flex-row items-center gap-1">
               <Ionicons name="headset-outline" size={18} color={colors.brand[600]} />

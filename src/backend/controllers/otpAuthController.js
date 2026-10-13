@@ -28,6 +28,12 @@ import { signToken } from '../utils/jwt.js';
 import { sendSms } from '../services/smsService.js';
 import { getKycDisplayStatus } from '../utils/kycStatus.js';
 import { issueVerifiedProof } from './signupVerificationController.js';
+import {
+  rememberDevice,
+  findRememberedDevice,
+  forgetDevice,
+  dropDeviceSession,
+} from '../services/deviceSessionService.js';
 
 /** The apps that sign in this way. */
 export const OTP_ROLES = ['user', 'vendor', 'rider'];
@@ -419,6 +425,19 @@ export const verifyOtp = async (req, res) => {
       });
     }
 
+    /*
+     * Remember this phone, if the app asked to. A failure here must not undo a
+     * sign-in that has already been proved - the phone just is not remembered.
+     */
+    const remembered = await rememberDevice({
+      userId: user._id,
+      role,
+      deviceId: req.body?.deviceId,
+    }).catch((error) => {
+      console.error('[auth] could not remember device:', error.message);
+      return null;
+    });
+
     const account = accountPayload(user);
     return res.status(200).json({
       status: 'success',
@@ -427,6 +446,7 @@ export const verifyOtp = async (req, res) => {
       token: signToken(user._id),
       user: account,
       data: { user: account, isNewUser: false },
+      ...(remembered ?? {}),
     });
   } catch (error) {
     console.error('[auth] verify-otp failed:', error);
@@ -438,4 +458,81 @@ export const verifyOtp = async (req, res) => {
   }
 };
 
-export default { sendOtp, verifyOtp };
+/**
+ * POST /auth/remember-login  { deviceId, rememberToken, role, phone? }
+ *
+ * Signs a phone back in without a code, if it is one that was signed in with a
+ * code recently enough and has not been signed out. Every way of not qualifying
+ * - unknown, expired, revoked, evicted, wrong app, suspended account - gets the
+ * same answer, so it cannot be used to learn which of them it was.
+ */
+export const rememberLogin = async (req, res) => {
+  const refuse = () =>
+    res.status(401).json({
+      status: 'error',
+      success: false,
+      code: 'remember_invalid',
+      message: 'Please sign in with a code.',
+    });
+
+  try {
+    const role = roleOf(req.body?.role);
+    if (!role) return refuse();
+
+    const session = await findRememberedDevice({
+      deviceId: req.body?.deviceId,
+      token: req.body?.rememberToken,
+    });
+    if (!session || session.role !== role) return refuse();
+
+    const user = await User.findById(session.user);
+    if (!user || user.isBlocked || (user.role || 'user') !== role) {
+      await dropDeviceSession(session);
+      return refuse();
+    }
+
+    // When the app says which number is being signed in, it has to be this
+    // account's: a phone remembered for one number does not open another.
+    if (req.body?.phone !== undefined && req.body?.phone !== null && req.body?.phone !== '') {
+      const { identifier, error } = readPhone(req.body);
+      if (error) return refuse();
+      const sameNumber = await User.exists({ $and: [{ _id: user._id }, identifierQuery(identifier)] });
+      if (!sameNumber) return refuse();
+    }
+
+    const account = accountPayload(user);
+    return res.status(200).json({
+      status: 'success',
+      success: true,
+      isNewUser: false,
+      token: signToken(user._id),
+      user: account,
+      data: { user: account, isNewUser: false },
+      rememberExpiresAt: session.expiresAt,
+    });
+  } catch (error) {
+    console.error('[auth] remember-login failed:', error);
+    return res.status(500).json({
+      status: 'error',
+      success: false,
+      message: 'Something went wrong signing you in. Please try again.',
+    });
+  }
+};
+
+/**
+ * POST /auth/forget-device  { deviceId, rememberToken }
+ *
+ * Signing out. Always answers the same, so it says nothing about whether the
+ * secret was good.
+ */
+export const forgetThisDevice = async (req, res) => {
+  try {
+    await forgetDevice({ deviceId: req.body?.deviceId, token: req.body?.rememberToken });
+  } catch (error) {
+    console.error('[auth] forget-device failed:', error);
+  }
+  return res.status(200).json({ status: 'success', success: true });
+};
+
+export default { sendOtp, verifyOtp, rememberLogin, forgetThisDevice };

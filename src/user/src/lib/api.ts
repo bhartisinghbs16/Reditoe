@@ -218,6 +218,100 @@ export const hydrateAuthToken = async (): Promise<string | null> => {
   return authToken;
 };
 
+/* ── Remember this device ───────────────────────────────────────────────── */
+
+const DEVICE_KEY = "reditoe.deviceId";
+const REMEMBER_KEY = "reditoe.remember";
+
+/**
+ * What the server handed this phone when a code signed it in.
+ *
+ * It is what lets the same phone come back without another code, for a limited
+ * time. The server fixes the date, counted from the code, and keeps only a few
+ * phones per account; signing out throws this away on both sides.
+ */
+interface RememberedDevice {
+  /** The ten digits it was remembered for. */
+  phone: string;
+  /** The secret. Only a hash of it exists on the server. */
+  token: string;
+  /** ISO date. Kept so a lapsed one is not sent just to be refused. */
+  expiresAt: string;
+}
+
+const lastTenDigits = (value: string) => value.replace(/\D/g, "").slice(-10);
+
+let deviceIdMemo: string | null = null;
+
+/**
+ * This install's identifier, made on first use and kept.
+ *
+ * It is not a secret - the secret is the token above - it only says which phone
+ * a remembered session belongs to, so one phone's token is no good on another.
+ */
+export async function getDeviceId(): Promise<string> {
+  if (deviceIdMemo) return deviceIdMemo;
+  try {
+    const stored = await AsyncStorage.getItem(DEVICE_KEY);
+    if (stored && /^[A-Za-z0-9_-]{16,64}$/.test(stored)) {
+      deviceIdMemo = stored;
+      return stored;
+    }
+  } catch {
+    // Fall through and make one; at worst the phone is remembered under a new id.
+  }
+
+  const randomUUID = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto?.randomUUID;
+  const fresh = (
+    randomUUID
+      ? randomUUID.call((globalThis as { crypto?: unknown }).crypto)
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+  )
+    .replace(/[^A-Za-z0-9_-]/g, "")
+    .padEnd(16, "0")
+    .slice(0, 64);
+
+  deviceIdMemo = fresh;
+  try {
+    await AsyncStorage.setItem(DEVICE_KEY, fresh);
+  } catch {
+    // Kept in memory for this run.
+  }
+  return fresh;
+}
+
+async function readRemembered(): Promise<RememberedDevice | null> {
+  try {
+    const raw = await AsyncStorage.getItem(REMEMBER_KEY);
+    if (!raw) return null;
+    const record = JSON.parse(raw) as Partial<RememberedDevice>;
+    if (!record?.token || !record.phone || !record.expiresAt) return null;
+    if (new Date(record.expiresAt).getTime() <= Date.now()) {
+      await clearRemembered();
+      return null;
+    }
+    return record as RememberedDevice;
+  } catch {
+    return null;
+  }
+}
+
+async function saveRemembered(record: RememberedDevice) {
+  try {
+    await AsyncStorage.setItem(REMEMBER_KEY, JSON.stringify(record));
+  } catch {
+    // Not remembered; the next sign-in simply asks for a code.
+  }
+}
+
+async function clearRemembered() {
+  try {
+    await AsyncStorage.removeItem(REMEMBER_KEY);
+  } catch {
+    // Nothing more to do.
+  }
+}
+
 export class ApiError extends Error {
   status: number;
   /** The server's machine-readable reason, where it sends one. */
@@ -1289,12 +1383,21 @@ export const api = {
       token?: string;
       phone?: string;
       phoneProof?: string;
+      rememberToken?: string;
+      rememberExpiresAt?: string;
       data?: { user?: unknown };
     }>("/auth/verify-otp", {
       method: "POST",
-      body: { phone, otp, role: "user" },
+      body: { phone, otp, role: "user", deviceId: await getDeviceId() },
     });
     if (res.token) setAuthToken(res.token);
+    if (res.token && res.rememberToken && res.rememberExpiresAt) {
+      await saveRemembered({
+        phone: lastTenDigits(phone),
+        token: res.rememberToken,
+        expiresAt: res.rememberExpiresAt,
+      });
+    }
     return res;
   },
 
@@ -1321,16 +1424,83 @@ export const api = {
     form.append("phone", input.phone);
     form.append("phoneProof", input.phoneProof);
     form.append("dateOfBirth", input.dateOfBirth);
+    form.append("deviceId", await getDeviceId());
     if (input.referralCode) form.append("referralCode", input.referralCode);
     await appendPhoto(form, "profilePhoto", input.photo);
 
-    const res = await request<{ token: string; data: { user: unknown } }>("/auth/register", {
+    const res = await request<{
+      token: string;
+      rememberToken?: string;
+      rememberExpiresAt?: string;
+      data: { user: unknown };
+    }>("/auth/register", {
       method: "POST",
       form,
       timeoutMs: 60000,
     });
     setAuthToken(res.token);
+    if (res.rememberToken && res.rememberExpiresAt) {
+      await saveRemembered({
+        phone: lastTenDigits(input.phone),
+        token: res.rememberToken,
+        expiresAt: res.rememberExpiresAt,
+      });
+    }
     return res;
+  },
+
+  /** The number this phone is remembered for, or null. */
+  async rememberedPhone() {
+    return (await readRemembered())?.phone ?? null;
+  },
+
+  /**
+   * Signs this phone back in without a code, if it was remembered and that has
+   * not lapsed. Null when there is nothing to use or the server will not accept
+   * it (and then it is forgotten here too, so it is not tried again). A dropped
+   * connection throws instead: that is not an answer, and the phone stays
+   * remembered for the next try.
+   */
+  async rememberedLogin(phone?: string) {
+    const record = await readRemembered();
+    if (!record) return null;
+    try {
+      const res = await request<{ token: string; data: { user: unknown } }>(
+        "/auth/remember-login",
+        {
+          method: "POST",
+          body: {
+            deviceId: await getDeviceId(),
+            rememberToken: record.token,
+            role: "user",
+            ...(phone ? { phone } : {}),
+          },
+        }
+      );
+      setAuthToken(res.token);
+      return res;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        await clearRemembered();
+        return null;
+      }
+      throw error;
+    }
+  },
+
+  /** Signing out: forget this phone here and, best effort, on the server. */
+  async forgetDevice() {
+    const record = await readRemembered();
+    await clearRemembered();
+    if (!record) return;
+    try {
+      await request("/auth/forget-device", {
+        method: "POST",
+        body: { deviceId: await getDeviceId(), rememberToken: record.token },
+      });
+    } catch {
+      // The server drops it on its own date regardless.
+    }
   },
 
   async myOrders() {
