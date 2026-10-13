@@ -18,3 +18,16 @@ src/admin
 .next
 dist
 .run-logs
+
+# Sibling apps and non-app folders. The user app imports nothing from them (checked
+# metro/tsconfig/imports), so they only add upload weight. If you build delivery or
+# vendor, remove its line here for that build.
+src/delivery
+src/vendor
+src/vendor-web
+src/preview
+src/website
+src/docs
+src/deploy
+src/scripts
+.github
