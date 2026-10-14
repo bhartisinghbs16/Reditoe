@@ -193,6 +193,137 @@ export async function request<T = unknown>(
   return (payload?.data ?? payload) as T;
 }
 
+/* ── Uploads ────────────────────────────────────────────────────────────── */
+
+/** The part of a response an upload reads; all `uploadForm` needs from either transport. */
+type Reply = Pick<Response, "ok" | "status" | "text">;
+
+/** A photographed document on a rider's connection is given longer than a JSON call. */
+const UPLOAD_TIMEOUT_MS = 60000;
+
+/**
+ * Sends a multipart body from a phone.
+ *
+ * Not `fetch`. Since SDK 53 Expo replaces the global `fetch` with its own, and
+ * that one refuses the one thing a phone puts in a multipart body: the
+ * `{ uri, name, type }` the document picker hands back. It throws "Unsupported
+ * FormDataPart implementation" before a single byte is sent, so no document a
+ * rider chose ever reached the server. React Native's own XMLHttpRequest still
+ * reads those parts straight off the disk, so a file goes through it.
+ */
+function postFormNatively(
+  url: string,
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    form: FormData;
+    signal: AbortSignal;
+  }
+): Promise<Reply> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(init.method, url);
+    for (const [name, value] of Object.entries(init.headers)) xhr.setRequestHeader(name, value);
+
+    xhr.onload = () =>
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        text: async () => xhr.responseText,
+      });
+    xhr.onerror = () => reject(new Error("Network request failed"));
+
+    // The caller's timer aborts the signal; an abort is reported as one, the
+    // way `fetch` reports it, so it is told apart from a dropped connection.
+    const abort = () => {
+      xhr.abort();
+      const aborted = new Error("Aborted");
+      aborted.name = "AbortError";
+      reject(aborted);
+    };
+    if (init.signal.aborted) return abort();
+    init.signal.addEventListener("abort", abort, { once: true });
+
+    xhr.send(init.form);
+  });
+}
+
+/**
+ * Posts a multipart body - a rider's document - and answers with what the
+ * server said, unwrapped from `data` like every other call.
+ *
+ * Multipart, so `request` does not apply: the boundary has to be set by the
+ * runtime, which means not setting Content-Type here at all. The session token
+ * goes along when there is one; the sign-up upload is sent before any session
+ * exists, and the server identifies the rider by the email and phone in the body.
+ *
+ * A failure to send says so, rather than leaking the runtime's own words
+ * ("Network request failed", or the FormData complaint above) to the rider.
+ */
+export async function uploadForm<T = unknown>(path: string, form: FormData): Promise<T> {
+  const bearer = await loadToken();
+  const headers: Record<string, string> = {
+    ...BASE_HEADERS,
+    ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+  };
+
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), UPLOAD_TIMEOUT_MS);
+
+  let response: Reply;
+  try {
+    // A browser builds its own multipart body, and `fetch` takes it as it is.
+    response =
+      typeof document === "undefined"
+        ? await postFormNatively(`${API_BASE_URL}${path}`, {
+            method: "POST",
+            headers,
+            form,
+            signal: deadline.signal,
+          })
+        : await fetch(`${API_BASE_URL}${path}`, {
+            method: "POST",
+            headers,
+            body: form,
+            signal: deadline.signal,
+          });
+  } catch (cause) {
+    const timedOut = cause instanceof Error && cause.name === "AbortError";
+    throw new ApiError(
+      timedOut
+        ? "The upload took too long. Please try again."
+        : "Could not reach the server. Please check your connection and try again.",
+      0,
+      cause
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const text = await response.text();
+  let payload: any = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      // A proxy's error page is not JSON. Fine on a failure, which is reported by
+      // status below; on a success it means the reply cannot be trusted.
+      if (response.ok) {
+        throw new ApiError("The server's reply could not be read. Please try again.", response.status);
+      }
+    }
+  }
+
+  if (!response.ok || payload?.status === "error" || payload?.status === "fail") {
+    throw new ApiError(
+      payload?.message || `Upload failed (${response.status})`,
+      response.status,
+      payload
+    );
+  }
+  return (payload?.data ?? payload) as T;
+}
+
 /* ── Endpoints ──────────────────────────────────────────────────────────── */
 
 export interface LoginResult {

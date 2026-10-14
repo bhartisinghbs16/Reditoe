@@ -17,7 +17,7 @@ import {
   colors,
 } from "@/components/ui";
 import { VerifiedField } from "@/components/verified-field";
-import { request, API_BASE_URL, NGROK_HEADERS, currentToken } from "@/lib/api";
+import { request, uploadForm } from "@/lib/api";
 import {
   EMPTY_DRAFT,
   clearDraft,
@@ -289,20 +289,7 @@ export default function RiderRegister() {
     body.append("email", String(draft.email ?? ""));
     body.append("phone", String(draft.phone ?? ""));
 
-    const token = currentToken();
-    const response = await fetch(`${API_BASE_URL}/rider/register/upload-document`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        ...NGROK_HEADERS,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body,
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload?.message ?? `Upload failed (${response.status})`);
-    }
+    await uploadForm("/rider/register/upload-document", body);
   };
 
   const submit = async () => {

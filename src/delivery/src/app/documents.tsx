@@ -19,7 +19,7 @@ import {
 import { ScreenHeader } from "@/components/screen-header";
 import { PartnerCard } from "@/components/partner-card";
 import { docTone, type TintName } from "@/lib/theme";
-import { API_BASE_URL, NGROK_HEADERS, currentToken } from "@/lib/api";
+import { uploadForm } from "@/lib/api";
 import { useStore } from "@/lib/store";
 
 /**
@@ -77,20 +77,7 @@ export default function Documents() {
       }
       body.append("documentType", kind);
 
-      const token = currentToken();
-      const response = await fetch(`${API_BASE_URL}/rider/documents/upload`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          ...NGROK_HEADERS,
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body,
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message ?? `Upload failed (${response.status})`);
-      }
+      await uploadForm("/rider/documents/upload", body);
 
       await refresh();
       Alert.alert("Uploaded", "Your document has been sent for verification.");
