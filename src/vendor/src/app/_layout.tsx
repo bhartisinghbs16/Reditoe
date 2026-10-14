@@ -9,6 +9,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { StoreProvider, useStore } from "@/lib/store";
 import { ApplicationGate } from "@/components/application-gate";
+import { UpdatePrompt } from "@/components/update-prompt";
 import { colors } from "@/lib/theme";
 import "@/global.css";
 
@@ -73,6 +74,7 @@ export default function RootLayout() {
               }}
             />
           </SessionGate>
+          <UpdatePrompt />
         </StoreProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

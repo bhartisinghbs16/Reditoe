@@ -6,6 +6,7 @@ import * as SplashScreen from "expo-splash-screen";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { UpdatePrompt } from "@/components/update-prompt";
 import { StoreProvider, useStore } from "@/lib/store";
 import { colors } from "@/lib/theme";
 import "@/global.css";
@@ -63,6 +64,7 @@ export default function RootLayout() {
             <Stack.Screen name="signin" options={{ animation: "slide_from_bottom" }} />
             <Stack.Screen name="signup" />
           </Stack>
+          <UpdatePrompt />
         </StoreProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
