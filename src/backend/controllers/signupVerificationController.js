@@ -111,12 +111,26 @@ export const sendSignupCode = async (req, res) => {
 
     const role = String(req.body?.role ?? 'partner');
     if (channel === 'email') {
-      await sendEmail(
+      /*
+       * `sendEmail` reports a refusal by returning false, not by throwing, so
+       * the result has to be read. It was not, and a provider that turned the
+       * message away still got "Code sent to your email address": the partner
+       * waited for a code that was never coming, and the form's Continue stayed
+       * greyed out behind a check they could not complete.
+       */
+      const sent = await sendEmail(
         value,
         'Your Reditoe verification code',
         `<p>Your Reditoe ${role} signup code is <strong>${code}</strong>.</p>
          <p>It expires in ${TTL_MINUTES} minutes.</p>`
       );
+      if (!sent) {
+        return res.status(503).json({
+          status: 'error',
+          code: 'email_unavailable',
+          message: 'We could not send the email right now. Please try again shortly.',
+        });
+      }
     } else {
       if (!isSmsConfigured()) {
         return res.status(503).json({

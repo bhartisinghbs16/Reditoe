@@ -265,38 +265,38 @@ export function RestaurantCard({
           carries an offer or a long cuisine list.
         */}
         {wide ? (
-          <View className="gap-1 p-3">
+          <View className="gap-0.5 px-3 py-2">
             <View className="flex-row items-center gap-2">
-              <Txt size="lg" weight="bold" numberOfLines={1} className="min-w-0 flex-1">
+              <Txt weight="bold" numberOfLines={1} className="min-w-0 flex-1">
                 {restaurant.name}
               </Txt>
-              <View className="flex-row items-center gap-1 rounded-md bg-leaf-600 px-2 py-1">
-                <Ionicons name="star" size={11} color="#ffffff" />
-                <Txt size="tiny" weight="bold" tone="white">
+              <View className="flex-row items-center gap-0.5 rounded bg-leaf-600 px-1.5 py-0.5">
+                <Ionicons name="star" size={10} color="#ffffff" />
+                <Txt size="micro" weight="bold" tone="white">
                   {restaurant.rating.toFixed(1)}
                 </Txt>
               </View>
             </View>
 
-            <Txt size="sm" tone="muted" numberOfLines={1}>
+            <Txt size="tiny" tone="muted" numberOfLines={1}>
               {restaurant.cuisines.join(", ")}
             </Txt>
 
-            <View className="flex-row items-center gap-2">
-              <Ionicons name="time-outline" size={14} color={colors.ink.muted} />
-              <Txt size="sm" tone="muted">
+            <View className="flex-row items-center gap-1.5">
+              <Ionicons name="time-outline" size={12} color={colors.ink.muted} />
+              <Txt size="tiny" tone="muted">
                 {restaurant.etaMinutes[0]}-{restaurant.etaMinutes[1]} mins
               </Txt>
-              <Txt size="sm" tone="faint">
+              <Txt size="tiny" tone="faint">
                 |
               </Txt>
-              <Txt size="sm" tone="muted">
+              <Txt size="tiny" tone="muted">
                 {restaurant.distanceKm.toFixed(1)} km
               </Txt>
-              <Txt size="sm" tone="faint">
+              <Txt size="tiny" tone="faint">
                 |
               </Txt>
-              <Txt size="sm" tone="muted" numberOfLines={1} className="min-w-0 flex-1">
+              <Txt size="tiny" tone="muted" numberOfLines={1} className="min-w-0 flex-1">
                 {currency(restaurant.priceForTwo)} for two
               </Txt>
             </View>

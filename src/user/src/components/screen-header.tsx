@@ -109,10 +109,18 @@ export function HeaderAction({
   /** Order Details puts this action in a hairline pill. */
   boxed?: boolean;
 }) {
+  const router = useRouter();
+  // Every "Support"/"Help" action in the app is the headset icon, and most
+  // screens render it without a handler, so it did nothing when tapped.
+  // Default those to the support screen.
+  const handlePress =
+    onPress ?? (icon.startsWith("headset") ? () => router.push("/support") : undefined);
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={label}
       className={`flex-row items-center gap-1.5 active:opacity-60 ${
         boxed ? "rounded-pill border border-line px-3 py-1.5" : ""
       }`}

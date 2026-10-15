@@ -252,7 +252,7 @@ export default function TrackOrderScreen() {
         title="Live Order Tracking"
         subtitle={`Order ID: ${order.code}`}
         subtitleIcon="copy-outline"
-        right={<HeaderAction icon="headset-outline" label="Help" />}
+        right={<HeaderAction icon="headset-outline" label="Help" onPress={() => router.push("/support")} />}
       />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-10">

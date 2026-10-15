@@ -168,6 +168,25 @@ export default function RiderRegister() {
   const [error, setError] = React.useState<string | null>(null);
   const [done, setDone] = React.useState(false);
 
+  /**
+   * Holds the documents the rider has chosen, until there is an account to
+   * attach them to.
+   *
+   * Not in the saved draft: a File on the web and a cache uri on a phone
+   * neither survive being written to storage and read back. Coming back to a
+   * half-finished application means picking the files again, which is the
+   * honest behaviour - the alternative is a filename shown against a file
+   * that is no longer there.
+   *
+   * Declared with the other state, above the early return for a draft that has
+   * not loaded yet. Below it, the first render (no draft) called one hook fewer
+   * than the next (draft loaded), and React throws "Rendered more hooks than
+   * during the previous render" - the screen after sign-up never appeared.
+   */
+  const [pendingDocs, setPendingDocs] = React.useState<
+    Record<string, DocumentPicker.DocumentPickerAsset>
+  >({});
+
   // Reopen where they left off.
   React.useEffect(() => {
     void (async () => {
@@ -211,21 +230,6 @@ export default function RiderRegister() {
       </View>
     );
   }
-
-
-  /**
-   * Holds the documents the rider has chosen, until there is an account to
-   * attach them to.
-   *
-   * Not in the saved draft: a File on the web and a cache uri on a phone
-   * neither survive being written to storage and read back. Coming back to a
-   * half-finished application means picking the files again, which is the
-   * honest behaviour - the alternative is a filename shown against a file
-   * that is no longer there.
-   */
-  const [pendingDocs, setPendingDocs] = React.useState<
-    Record<string, DocumentPicker.DocumentPickerAsset>
-  >({});
 
   /**
    * Chooses one document. Nothing is sent yet.
@@ -850,10 +854,16 @@ export default function RiderRegister() {
           </>
         )}
 
+        {/*
+          Why Continue is greyed out. This was a line of small grey text, and a
+          button that does nothing with no visible reason looks broken - the
+          email check in particular sits at the top of step one, well above the
+          button.
+        */}
         {problem && (
-          <Txt size="tiny" tone="muted" className="mt-3">
-            {problem}
-          </Txt>
+          <View className="mt-3">
+            <NoteBar tone="amber" icon="information-circle" detail={problem} />
+          </View>
         )}
 
         <View className="mt-5 flex-row gap-3">
