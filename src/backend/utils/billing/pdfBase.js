@@ -124,7 +124,7 @@ export function letterhead(doc, {
   logoY = 34.3,
   singleLine = false,
 }) {
-  doc.addImage(assets().logo, 'PNG', 37.2, logoY + top, 158.6, 54.96);
+  doc.addImage(assets().logo, 'PNG', 36, logoY + top, 158.6, 54.96);
 
   rect(doc, boxX, 8.8 + top, boxW, boxH, { fill: COLOR.white, stroke: COLOR.black });
   text(doc, 'REDITOE INDIA LLP', boxX + boxW / 2, 22.4 + top, {

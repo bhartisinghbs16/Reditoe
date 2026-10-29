@@ -164,35 +164,35 @@ const labelled = (doc, label, value, x, valueX, y, { maxW = null, bold = true } 
 };
 
 function drawSummaryPage(doc, d) {
-  banner(doc, d, { boxX: 333.2, boxY: 12.8, boxW: 240.8, boxH: 78.4, logoX: 46.7, logoY: 19.9 });
+  banner(doc, d, { boxX: 319.5, boxY: 19.7, boxW: 240.8, boxH: 78.4, logoX: 46.9, logoY: 19.9 });
   heading(doc, 'Delivery Partner Earnings & Payout Statement', 283.6, 132);
 
   // Partner details.
-  rect(doc, 64.1, 153.7, 225, 112.3, { fill: COLOR.white, stroke: COLOR.black });
-  boxTitle(doc, 'Partner Details', 126.5, 162);
+  rect(doc, 46.9, 153.7, 252, 112.3, { fill: COLOR.white, stroke: COLOR.black });
+  boxTitle(doc, 'Partner Details', 172.9, 162);
   const p = d.partner;
   const left = [
     ['Name', p.name], ['Partner ID', p.partnerId], ['VEHICLE TYPE', p.vehicle],
     ['CITY', p.city], ['GSTIN (If Registered )', p.gstin],
   ];
-  left.forEach(([label, value], i) => labelled(doc, label, value, 71, 152, 182 + i * 10.6, { maxW: 132 }));
-  text(doc, 'ADDRESS', 71, 234.8, { size: 7.5, bold: true });
-  text(doc, ':', 144, 234.8, { size: 7.5, bold: true });
-  wrap(doc, p.address, 132, { size: 7.5, bold: true }).slice(0, 3)
-    .forEach((l, i) => text(doc, l, 152, 234.8 + i * 9.6, { size: 7.5, bold: true }));
+  left.forEach(([label, value], i) => labelled(doc, label, value, 54, 135, 182 + i * 10.6, { maxW: 156 }));
+  text(doc, 'ADDRESS', 54, 234.8, { size: 7.5, bold: true });
+  text(doc, ':', 127, 234.8, { size: 7.5, bold: true });
+  wrap(doc, p.address, 156, { size: 7.5, bold: true }).slice(0, 3)
+    .forEach((l, i) => text(doc, l, 135, 234.8 + i * 9.6, { size: 7.5, bold: true }));
 
   // Bill details.
-  rect(doc, 304, 153, 245.8, 112.3, { fill: COLOR.white, stroke: COLOR.black });
-  boxTitle(doc, 'Bill Details', 427.9, 161.3);
-  labelled(doc, 'Bill Number', d.bill.number, 311, 402, 181.2, { maxW: 140 });
-  labelled(doc, 'Bill Date', d.bill.date, 311, 402, 191.9);
-  labelled(doc, 'Billing Period', d.bill.period, 311, 402, 202.4, { maxW: 140 });
+  rect(doc, 308.3, 153.7, 252, 112.3, { fill: COLOR.white, stroke: COLOR.black });
+  boxTitle(doc, 'Bill Details', 434.3, 162);
+  labelled(doc, 'Bill Number', d.bill.number, 315.5, 406.5, 182, { maxW: 148 });
+  labelled(doc, 'Bill Date', d.bill.date, 315.5, 406.5, 192.6);
+  labelled(doc, 'Billing Period', d.bill.period, 315.5, 406.5, 203.2, { maxW: 148 });
 
   // Payout summary.
   heading(doc, 'Rider Payout Summary:', 46.9, 307, { align: 'left', ruleFrom: 46.9, ruleTo: 205.8 });
-  rect(doc, 66.2, 331.6, 415.7, 147.3, { fill: COLOR.white, stroke: COLOR.black });
-  text(doc, 'Description', 74.8, 339.8, { size: 7.5 });
-  text(doc, 'Amount', 206.5, 339.8, { size: 7.5, align: 'right' });
+  rect(doc, 46.9, 331.6, 513.4, 147.3, { fill: COLOR.white, stroke: COLOR.black });
+  text(doc, 'Description', 54, 339.8, { size: 7.5 });
+  text(doc, 'Amount', 550, 339.8, { size: 7.5, align: 'right' });
   const s = d.summary;
   const rows = [
     ['Total earning', rupee(s.totalEarning)],
@@ -205,11 +205,11 @@ function drawSummaryPage(doc, d) {
   ];
   rows.forEach(([label, value], i) => {
     const y = 359.7 + i * 10.55;
-    text(doc, label, 73.2, y, { size: 7.5 });
-    text(doc, value, 206.5, y, { size: 7.5, align: 'right' });
+    text(doc, label, 54, y, { size: 7.5 });
+    text(doc, value, 550, y, { size: 7.5, align: 'right' });
   });
-  text(doc, 'Net payable', 73.2, 454.8, { size: 7.5, bold: true });
-  text(doc, rupee(s.netPayable), 206.5, 454.8, { size: 7.5, bold: true, align: 'right' });
+  text(doc, 'Net payable', 54, 454.8, { size: 7.5, bold: true });
+  text(doc, rupee(s.netPayable), 550, 454.8, { size: 7.5, bold: true, align: 'right' });
 
   // In words.
   const words = `In word : ${d.inWords}`;
@@ -223,8 +223,8 @@ function drawSummaryPage(doc, d) {
   doc.setLineWidth(0.48);
 
   // Payout information.
-  rect(doc, 58.8, 549.5, 220.4, 162.8, { fill: COLOR.white, stroke: COLOR.black });
-  text(doc, 'Payout Information', 129, 557.7, { size: 7.5, align: 'center' });
+  rect(doc, 46.9, 549.5, 252, 162.8, { fill: COLOR.white, stroke: COLOR.black });
+  text(doc, 'Payout Information', 172.9, 557.7, { size: 7.5, align: 'center' });
   const o = d.payout;
   [
     ['Payment status', o.status],
@@ -235,32 +235,32 @@ function drawSummaryPage(doc, d) {
     ['BANK ACCOUNT', o.account],
   ].forEach(([label, value], i) => {
     const y = 597.6 + i * 19.98;
-    text(doc, `${label} :`, 65.8, y, { size: 7.5 });
-    text(doc, value, 65.8 + 72, y, { size: 7.5, bold: true, maxW: 130 });
+    text(doc, `${label} :`, 54, y, { size: 7.5 });
+    text(doc, value, 54 + 76, y, { size: 7.5, bold: true, maxW: 160 });
   });
 
   // Rider summary.
-  rect(doc, 296.5, 545.4, 220.5, 162.8, { fill: COLOR.white, stroke: COLOR.black });
-  text(doc, 'Rider Summary', 406.7, 553.6, { size: 7.5, align: 'center' });
+  rect(doc, 308.3, 549.5, 252, 162.8, { fill: COLOR.white, stroke: COLOR.black });
+  text(doc, 'Rider Summary', 434.3, 557.7, { size: 7.5, align: 'center' });
   const a = d.activity;
   [
     ['Total order', a.total], ['Accepted orders', a.accepted], ['Rejected orders', a.rejected],
     ['Cancelled orders', a.cancelled], ['Escalations', a.escalations], ['Distance Travelled', `${a.distance} km`],
   ].forEach(([label, value], i) => {
-    const y = 573.6 + i * 19.98;
-    text(doc, `${label} :`, 303.5, y, { size: 7.5 });
-    text(doc, String(value), 303.5 + 76, y, { size: 7.5, bold: true });
+    const y = 577.7 + i * 19.98;
+    text(doc, `${label} :`, 315.5, y, { size: 7.5 });
+    text(doc, String(value), 315.5 + 80, y, { size: 7.5, bold: true });
   });
 
   // Thank you.
-  rect(doc, 102.7, 746.9, 404.5, 42.2, { fill: COLOR.white, stroke: COLOR.black });
-  text(doc, 'Thank you for being a Valued Delivery Partner', 304.8, 759.7, {
+  rect(doc, 46.9, 746.9, 513.4, 42.2, { fill: COLOR.white, stroke: COLOR.black });
+  text(doc, 'Thank you for being a Valued Delivery Partner', 303.6, 759.7, {
     size: 15, color: '#ee0000', align: 'center', maxW: 390,
   });
 }
 
 function drawOrderPage(doc, d, rows, { last }) {
-  banner(doc, d, { boxX: 326.8, boxY: 19.7, boxW: 240.7, boxH: 78.2, logoX: 46.7, logoY: 19.9 });
+  banner(doc, d, { boxX: 319.5, boxY: 19.7, boxW: 240.8, boxH: 78.4, logoX: 46.9, logoY: 19.9 });
   heading(doc, 'Order wise earning REPORT', 283.7, 121.5);
 
   const cols = [46.9, 82.9, 146.8, 260.0, 313.3, 366.6, 439.8, 486.5, 560.3];

@@ -16,6 +16,12 @@ import {
 const FOOTER_LABEL =
   'REDITOE • Combined Billing Document • Customer Bill | Restaurant Settlement | Restaurant Tax Invoice';
 
+/** Every block on every page runs between the same two edges. */
+const L = 36;
+const R = 576;
+const MID = 306;
+const PAD = 5.6;
+
 const PLATFORM_FEE_GST_RATE = 18;
 const DELIVERY_GST_RATE = 18;
 
@@ -210,9 +216,9 @@ function field(doc, label, value, x, y, valueX, valueW, { lineH = 9.6 } = {}) {
 }
 
 function partiesBox(doc, { y, h, left, right }) {
-  const x0 = 31.8;
-  const mid = 305.8;
-  const x1 = 580.2;
+  const x0 = L;
+  const mid = MID;
+  const x1 = R;
   rect(doc, x0, y, x1 - x0, h, { stroke: COLOR.black });
   line(doc, mid, y, mid, y + h);
   text(doc, left.title, (x0 + mid) / 2, y + 5, { size: 7.5, bold: true, color: COLOR.muted, align: 'center' });
@@ -232,7 +238,8 @@ function column(doc, rows, { x, valueX, valueW, startY }) {
 }
 
 function serviceTable(doc, { top, lines, cgstLabel, sgstLabel, netLabel, rowsMin = 0 }) {
-  const cols = [31.8, 79.8, 164.8, 221.2, 262.3, 319.2, 391.0, 464.9, 510.0, 563.4];
+  const cols = [31.8, 79.8, 164.8, 221.2, 262.3, 319.2, 391.0, 464.9, 510.0, 563.4]
+    .map((x) => L + ((x - 31.8) * (R - L)) / (563.4 - 31.8));
   const headH = 29.8;
 
   const headers = ['SL.No', 'Particulars', 'quantity', ['Gross', 'value'], 'Discount', netLabel, cgstLabel, sgstLabel, 'Total'];
@@ -286,8 +293,8 @@ function totalsBlock(doc, { y, totals, cgstTitle, sgstTitle }) {
   ];
   rows.forEach(([label, value], i) => {
     const ry = y + i * 16.8;
-    text(doc, label, 391, ry, { size: 10.5, bold: true, color: COLOR.navy });
-    text(doc, `= ${money(value)}`, 563.4, ry, { size: 10.5, bold: true, color: COLOR.navy, align: 'right' });
+    text(doc, label, R - 172, ry, { size: 10.5, bold: true, color: COLOR.navy });
+    text(doc, `= ${money(value)}`, R - PAD, ry, { size: 10.5, bold: true, color: COLOR.navy, align: 'right' });
   });
   return y + rows.length * 16.8;
 }
@@ -295,11 +302,11 @@ function totalsBlock(doc, { y, totals, cgstTitle, sgstTitle }) {
 /* ── Page 1: customer order bill ────────────────────────────────────────── */
 
 function drawBill(doc, d) {
-  letterhead(doc, { gstin: d.company.gstin, pan: d.company.pan, emailLink: false, boxX: 369, boxW: 220.2, boxH: 103.2 });
+  letterhead(doc, { gstin: d.company.gstin, pan: d.company.pan, emailLink: false });
   text(doc, 'CUSTOMER ORDER BILL', 306, 131.7, { size: 12, bold: true, color: COLOR.navy, align: 'center' });
 
   metaStrip(doc, {
-    x0: 31.8, x1: 586.7, y: 156.7, cols: [216.6, 401.4],
+    x0: L, x1: R, y: 156.7, cols: [216, 396],
     labels: ['Order ID', 'ORDER Time', 'Payment method'],
     values: [d.orderRef, d.orderTime, d.paymentMethod],
   });
@@ -311,13 +318,13 @@ function drawBill(doc, d) {
     ['Delivery Address', d.customer.address],
     ['Phone number', d.customer.phone],
     ['GST :', 'Unregistered'],
-  ], { x: 37.4, valueX: 104, valueW: 196, startY: top + 23 });
+  ], { x: L + PAD, valueX: L + 78, valueW: MID - L - 84, startY: top + 23 });
   const rightEnd = column(doc, [
     ['Restaurant Name', d.restaurant.name],
     ['Delivery Address', d.restaurant.address],
     ['GST', d.restaurant.gstin],
     ['Fssai', d.restaurant.fssai],
-  ], { x: 311.4, valueX: 386, valueW: 188, startY: top + 14.4 });
+  ], { x: MID + PAD, valueX: MID + 80, valueW: R - MID - 86, startY: top + 17.5 });
   const boxBottom = Math.max(296.8, leftEnd + 3, rightEnd + 3);
   partiesBox(doc, {
     y: top, h: boxBottom - top,
@@ -328,15 +335,15 @@ function drawBill(doc, d) {
 
   // Bill summary.
   const s = d.summary;
-  text(doc, 'BILL SUMMARY', 37.4, 317.5 + dy, { size: 8.5, bold: true, color: COLOR.navy });
+  text(doc, 'BILL SUMMARY', L + PAD, 317.5 + dy, { size: 8.5, bold: true, color: COLOR.navy });
 
-  const tx0 = 43;
-  const tx1 = 569;
-  const divider = 410.4;
+  const tx0 = L;
+  const tx1 = R;
+  const divider = 406;
   let y = 326.2 + dy;
   rect(doc, tx0, y, tx1 - tx0, 16.5, { fill: COLOR.navy });
-  text(doc, 'Description', 46.4, y + 8.3, { size: 7.5, bold: true, color: COLOR.white });
-  text(doc, 'Amount (₹)', 565.6, y + 8.3, { size: 7.5, bold: true, color: COLOR.white, align: 'right' });
+  text(doc, 'Description', tx0 + 4, y + 8.3, { size: 7.5, bold: true, color: COLOR.white });
+  text(doc, 'Amount (₹)', tx1 - 4, y + 8.3, { size: 7.5, bold: true, color: COLOR.white, align: 'right' });
   y += 16.5;
 
   const rows = [['Item Total', rupee(s.subtotal)]];
@@ -350,32 +357,31 @@ function drawBill(doc, d) {
   rows.forEach(([label, amount], i) => {
     rect(doc, tx0, y, tx1 - tx0, 16.5, { fill: i % 2 ? COLOR.band : COLOR.white, stroke: COLOR.rule });
     line(doc, divider, y, divider, y + 16.5, COLOR.rule);
-    text(doc, label, 46.4, y + 8.3, { size: 7.5 });
-    text(doc, amount, 565.6, y + 8.3, { size: 7.5, align: 'right' });
+    text(doc, label, tx0 + 4, y + 8.3, { size: 7.5 });
+    text(doc, amount, tx1 - 4, y + 8.3, { size: 7.5, align: 'right' });
     y += 16.5;
   });
 
   // Totals sit a hair left of the table, as drawn.
-  const ux0 = 34.4;
-  const ux1 = 560;
-  const udiv = 365.4;
+  const ux0 = tx0;
+  const ux1 = tx1;
+  const udiv = divider;
   const totalRow = (label, amount, fill, bold, h, color, size) => {
     rect(doc, ux0, y, ux1 - ux0, h, { fill, stroke: COLOR.rule });
     line(doc, udiv, y, udiv, y + h, COLOR.rule);
-    text(doc, label, 37.4, y + h / 2, { size, bold, color });
-    text(doc, amount, 556.6, y + h / 2, { size, bold: true, color, align: 'right' });
+    text(doc, label, ux0 + 4, y + h / 2, { size, bold, color });
+    text(doc, amount, ux1 - 4, y + h / 2, { size, bold: true, color, align: 'right' });
     y += h;
   };
-  y += 0.4;
   totalRow('Order total (including GST)', rupee(s.orderTotal), COLOR.band, false, 16.4, COLOR.slate, 7.5);
   totalRow('Wallet amount used', s.walletUsed > 0 ? `− ${rupee(s.walletUsed)}` : rupee(0), COLOR.band, false, 16.4, COLOR.slate, 7.5);
   totalRow('YOU PAY NOW', rupee(s.payNow), COLOR.navy, true, 18.6, COLOR.white, 9);
 
   // GST breakdown.
   y += 4.6;
-  text(doc, 'GST BREAKDOWN', 37.4, y + 5.2, { size: 8.5, bold: true, color: COLOR.navy });
+  text(doc, 'GST BREAKDOWN', L + PAD, y + 5.2, { size: 8.5, bold: true, color: COLOR.navy });
   y += 13.6;
-  const gcols = [43, 309.6, 424.8, 569];
+  const gcols = [L, 306, 421, R];
   rect(doc, gcols[0], y, gcols[3] - gcols[0], 15.9, { fill: COLOR.navy });
   ['GST applied on', 'Rate', 'GST amount (₹)'].forEach((label, i) => {
     text(doc, label, gcols[i] + 3.4, y + 8, { size: 6.9, bold: true, color: COLOR.white });
@@ -400,22 +406,22 @@ function drawBill(doc, d) {
   text(doc, rupee(d.totalGst), gcols[2] + 3.4, y + 8, { size: 6.9, bold: true });
   y += 15.9;
 
-  text(doc, 'Packing charges and platform fees appear only when configured and applicable.', 37.4, y + 7.5, {
+  text(doc, 'Packing charges and platform fees appear only when configured and applicable.', L + PAD, y + 7.5, {
     size: 6.9, color: COLOR.muted,
   });
 
-  text(doc, 'Authorised signatory: ______________________', 428.4, 696.3, { size: 7.5 });
+  text(doc, 'Authorised signatory: ______________________', R, 696.3, { size: 7.5, align: 'right' });
   footer(doc, FOOTER_LABEL);
 }
 
 /* ── Pages 2 and 3: tax invoices ────────────────────────────────────────── */
 
 function invoiceHeader(doc, d, { shift, title, invoiceNumber }) {
-  letterhead(doc, { gstin: d.company.gstin, pan: d.company.pan, top: shift, boxX: 381, boxW: 220.2, boxH: 103.2 });
+  letterhead(doc, { gstin: d.company.gstin, pan: d.company.pan, top: shift });
   text(doc, title, 306, 144.4 + shift, { size: 12, bold: true, color: COLOR.navy, align: 'center', maxW: 520 });
 
   const y = 169.3 + shift;
-  const edges = [31.8, 131.9, 256.9, 384.5, 560.2];
+  const edges = [L, 138, 258, 387, R];
   ['Order ID', 'Invoice Date', 'Invoice Number', 'Place of supply'].forEach((label, i) => {
     rect(doc, edges[i], y, edges[i + 1] - edges[i], 20.1, { stroke: COLOR.black });
     text(doc, label, (edges[i] + edges[i + 1]) / 2, y + 10.1, { size: 7.5, bold: true, color: COLOR.muted, align: 'center' });
@@ -443,17 +449,17 @@ function drawRestaurantInvoice(doc, d) {
     ['GST :', d.restaurant.gstin],
     ['Fssai', d.restaurant.fssai],
     ['State', d.restaurant.state],
-  ], { x: 37.4, valueX: 80, valueW: 218, startY: top + 19.6 });
+  ], { x: L + PAD, valueX: L + 48, valueW: MID - L - 54, startY: top + 19.6 });
   const rightEnd = column(doc, [
     ['Name', d.customer.name],
     ['Address', d.customer.address],
     ['State', d.customer.state],
-  ], { x: 311.4, valueX: 350, valueW: 222, startY: top + 33.8 });
+  ], { x: MID + PAD, valueX: MID + 44, valueW: R - MID - 50, startY: top + 19.6 });
   const bottom = Math.max(311.3, leftEnd + 3, rightEnd + 3);
   partiesBox(doc, { y: top, h: bottom - top, left: { title: 'Supplier (Restaurant)' }, right: { title: 'Billed To (Customer)' } });
   const dy = bottom - 311.3;
 
-  text(doc, 'Service Details', 37.4, 352 + dy, { size: 12, bold: true, color: COLOR.navy });
+  text(doc, 'Service Details', L + PAD, 352 + dy, { size: 12, bold: true, color: COLOR.navy });
   const half = d.foodRate / 2;
   const end = serviceTable(doc, {
     top: 378.6 + dy,
@@ -466,10 +472,10 @@ function drawRestaurantInvoice(doc, d) {
     y: end + 17, totals: d.restaurantTotals, cgstTitle: 'CGST', sgstTitle: 'SGST',
   });
 
-  text(doc, `Amount in words: ${amountInWords(d.restaurantTotals.total)}`, 37.4, afterTotals + 38, {
+  text(doc, `Amount in words: ${amountInWords(d.restaurantTotals.total)}`, L + PAD, afterTotals + 38, {
     size: 10.5, bold: true, color: COLOR.navy, maxW: 520,
   });
-  text(doc, `Amount of INR ${money(d.restaurantTotals.total)} settled against order id ${d.orderRef} dated on ${d.invoiceDate}`, 37.4, afterTotals + 72, {
+  text(doc, `Amount of INR ${money(d.restaurantTotals.total)} settled against order id ${d.orderRef} dated on ${d.invoiceDate}`, L + PAD, afterTotals + 72, {
     size: 10.5, bold: true, color: COLOR.navy, maxW: 520,
   });
   footer(doc, FOOTER_LABEL);
@@ -486,18 +492,18 @@ function drawPlatformInvoice(doc, d) {
     ['GST :', d.company.gstin],
     ['PAN', d.company.pan],
     ['EMAIL ID :', 'order@reditoe.com'],
-  ], { x: 37.4, valueX: 92, valueW: 206, startY: top + 19.6 });
+  ], { x: L + PAD, valueX: L + 56, valueW: MID - L - 62, startY: top + 19.6 });
   const rightEnd = column(doc, [
     ['Name', d.customer.name],
     ['Address', d.customer.address],
     ['GST :', 'UNREGISTERED'],
     ['PLACE OF SUPPLY :', d.customer.state],
-  ], { x: 311.4, valueX: 392, valueW: 182, startY: top + 28.8 });
+  ], { x: MID + PAD, valueX: MID + 86, valueW: R - MID - 92, startY: top + 19.6 });
   const bottom = Math.max(392.8, leftEnd + 3, rightEnd + 3);
   partiesBox(doc, { y: top, h: bottom - top, left: { title: 'Reditoe India LLP' }, right: { title: 'Billed To (Customer)' } });
   const dy = bottom - 392.8;
 
-  text(doc, 'Service Detail', 37.4, 416.9 + dy, { size: 12, bold: true, color: COLOR.navy });
+  text(doc, 'Service Detail', L + PAD, 416.9 + dy, { size: 12, bold: true, color: COLOR.navy });
   const half = d.platformRate / 2;
   const end = serviceTable(doc, {
     top: 443.3 + dy,
@@ -511,10 +517,10 @@ function drawPlatformInvoice(doc, d) {
     y: end + 25, totals: d.platformTotals, cgstTitle: 'CGST', sgstTitle: 'SGST',
   });
 
-  text(doc, `Amount in words: ${amountInWords(d.platformTotals.total)}`, 37.4, afterTotals + 38, {
+  text(doc, `Amount in words: ${amountInWords(d.platformTotals.total)}`, L + PAD, afterTotals + 38, {
     size: 10.5, bold: true, color: COLOR.navy, maxW: 520,
   });
-  text(doc, `Amount of INR ${money(d.platformTotals.total)} settled against order id ${d.orderRef} dated on ${d.invoiceDate}`, 37.4, afterTotals + 72, {
+  text(doc, `Amount of INR ${money(d.platformTotals.total)} settled against order id ${d.orderRef} dated on ${d.invoiceDate}`, L + PAD, afterTotals + 72, {
     size: 10.5, bold: true, color: COLOR.navy, maxW: 520,
   });
   footer(doc, FOOTER_LABEL);
