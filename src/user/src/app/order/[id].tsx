@@ -128,6 +128,20 @@ export default function OrderDetailScreen() {
 
   const delivered = order.status === "Delivered";
 
+  // The invoice exists once the order has been delivered; the link is signed
+  // and short-lived so the system viewer can open it without a login header.
+  const openInvoice = async () => {
+    if (!delivered) {
+      Alert.alert("Invoice not ready", "Your invoice is generated once the order has been delivered.");
+      return;
+    }
+    try {
+      await Linking.openURL(await api.invoiceLink(order.id));
+    } catch (error) {
+      Alert.alert("Couldn't open the invoice", error instanceof Error ? error.message : "Please try again.");
+    }
+  };
+
   /* The customer's rating of this order, and sending it. */
   const [rating, setRating] = React.useState(0);
   const [comment, setComment] = React.useState("");
@@ -529,7 +543,13 @@ export default function OrderDetailScreen() {
           ].map((action) => (
             <Pressable
               key={action.label}
-              onPress={() => action.label === "Report an Issue" && router.push("/refunds")}
+              onPress={() => {
+                if (action.label === "Report an Issue") {
+                  router.push("/refunds");
+                } else {
+                  openInvoice();
+                }
+              }}
               className="h-14 flex-1 items-center justify-center gap-1 rounded-card border border-brand-500 px-1 active:opacity-70"
             >
               <Ionicons name={action.icon} size={17} color={colors.brand[600]} />

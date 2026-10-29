@@ -30,6 +30,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
+import { api } from "@/lib/api";
 import { PageHeader } from "@/components/common/page-header";
 import { OrderRouteMap } from "@/components/orders/order-route-map";
 import { OrderConversation } from "@/components/orders/order-conversation";
@@ -406,9 +407,30 @@ function OrderDetail({ order }: { order: Order }) {
         ]}
         actions={
           <>
-            <Button variant="outline" size="lg" onClick={() => window.print()}>
+            <Button
+              variant="outline"
+              size="lg"
+              disabled={order.status !== "Delivered"}
+              title={
+                order.status === "Delivered"
+                  ? undefined
+                  : "The invoice is generated once the order is delivered"
+              }
+              onClick={async () => {
+                try {
+                  await api.download(
+                    `/admin/orders/${order._id}/invoice`,
+                    `invoice-${reference}.pdf`
+                  );
+                } catch (error) {
+                  toast.error(
+                    error instanceof Error ? error.message : "Could not download the invoice"
+                  );
+                }
+              }}
+            >
               <Printer className="size-4" />
-              Print Invoice
+              Download Invoice
             </Button>
             <Button
               variant="outline"

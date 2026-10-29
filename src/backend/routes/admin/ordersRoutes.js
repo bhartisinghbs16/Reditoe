@@ -1,3 +1,4 @@
+import { downloadAdminInvoice } from '../../controllers/billingDocumentController.js';
 /**
  * Admin orders routes. All protected by adminProtect (applied in index).
  */
@@ -38,6 +39,7 @@ router.get('/:id/tracking', getOrderTracking);
 
 // What the customer and their delivery partner said to each other.
 router.get('/:id/chat', getOrderConversation);
+router.get('/:id/invoice', downloadAdminInvoice);
 router.get('/:id', getOrderById);
 
 export default router;

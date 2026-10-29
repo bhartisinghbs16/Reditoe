@@ -16,6 +16,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { toast } from "sonner";
+import { PayoutStatementButton } from "@/components/partners/payout-statement-button";
 import { PageHeader } from "@/components/common/page-header";
 import { Panel, DetailRow } from "@/components/common/panel";
 import { StatCard, StatGrid } from "@/components/common/stat-card";
@@ -218,6 +219,7 @@ export default function PartnerDetailPage() {
               status={data.isBlocked ? "blocked" : (data.status ?? "inactive")}
               className="px-2.5 py-1 text-[0.8125rem]"
             />
+            <PayoutStatementButton riderId={data._id} />
             {data.kycStatus !== "approved" && (
               <Button
                 variant="outline"

@@ -21,9 +21,17 @@ import { protect } from '../middleware/auth.js';
 import { getCustomerDeliveryCode } from '../controllers/handoverController.js';
 import { adminProtect } from '../middleware/adminAuth.js';
 import orderCommunicationRoutes from './orderCommunicationRoutes.js';
+import {
+  downloadCustomerInvoice,
+  createCustomerInvoiceLink,
+  downloadInvoiceByLink,
+} from '../controllers/billingDocumentController.js';
 
 const router = express.Router();
 
+router.get('/invoice-file/:token', downloadInvoiceByLink);
+router.get('/:orderId/invoice', protect, downloadCustomerInvoice);
+router.get('/:orderId/invoice-link', protect, createCustomerInvoiceLink);
 router.post('/create', protect, createOrder);
 router.post('/pricing-preview', protect, previewOrderPricing);
 router.get('/my-orders', protect, getMyOrders);

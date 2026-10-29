@@ -8,6 +8,7 @@ import {
   updateRiderDocument,
   getRiderPayouts,
   getRiderActivity,
+  getRiderPayoutStatement,
 } from '../../controllers/admin/adminRiderFinanceController.js';
 import {
   getRiders,
@@ -47,6 +48,7 @@ router.get('/:id/orders', getRiderOrders);
 router.get('/:id/documents', getRiderDocuments);
 router.patch('/:id/documents/:documentType', updateRiderDocument);
 router.get('/:id/payouts', getRiderPayouts);
+router.get('/:id/payout-statement', getRiderPayoutStatement);
 router.get('/:id/activity', getRiderActivity);
 
 router.get('/:id', getRiderById);

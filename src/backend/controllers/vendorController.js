@@ -8,6 +8,7 @@ import FileUpload from '../models/FileUpload.js';
 import Invoice from '../models/Invoice.js';
 import cloudStorageService from '../services/cloudStorageService.js';
 import { generateInvoicePDF } from '../utils/pdfGenerator.js';
+import { downloadVendorInvoice } from './billingDocumentController.js';
 import { signToken } from '../utils/jwt.js';
 import VendorVisibilityMiddleware from '../middleware/vendorVisibilityMiddleware.js';
 import mongoose from 'mongoose';
@@ -2161,7 +2162,10 @@ export const testPDFGeneration = async (req, res) => {
 };
 
 // Download invoice PDF for vendor - GET /api/vendor/orders/:orderId/invoice
-export const downloadOrderInvoice = async (req, res) => {
+export const downloadOrderInvoice = (req, res) => downloadVendorInvoice(req, res);
+
+// Superseded by billingDocumentController; kept until the old body below is removed.
+export const legacyDownloadOrderInvoice = async (req, res) => {
   try {
     const { orderId } = req.params;
     const vendorId = req.user._id;

@@ -53,6 +53,25 @@ export const signToken = (id) => {
   return token;
 };
 
+/**
+ * A short-lived link to one order's invoice.
+ *
+ * The apps open a PDF through the system viewer, which cannot send an
+ * Authorization header, so the signed link carries the proof instead. It is
+ * for one order and one customer, expires in ten minutes, and has no `id`
+ * claim, so it is not accepted anywhere a login token is.
+ */
+export const signInvoiceLinkToken = (orderId, userId) =>
+  jwt.sign({ purpose: 'invoice', orderId: String(orderId), userId: String(userId) }, JWT_SECRET_FINAL, {
+    expiresIn: '10m',
+  });
+
+export const verifyInvoiceLinkToken = (token) => {
+  const decoded = jwt.verify(token, JWT_SECRET_FINAL);
+  if (decoded?.purpose !== 'invoice') throw new Error('Not an invoice link');
+  return decoded;
+};
+
 export const verifyToken = (token) => {
   const tokenFingerprint = generateTokenFingerprint(token);
   

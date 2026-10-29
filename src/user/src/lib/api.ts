@@ -1133,6 +1133,14 @@ export const api = {
     return this.supportTicket(id);
   },
 
+  /** A short-lived link to the order's invoice PDF; the server refuses until it is delivered. */
+  async invoiceLink(orderId: string) {
+    const res = await request<{ data: { url: string } }>(`/orders/${orderId}/invoice-link`, {
+      auth: true,
+    });
+    return res.data.url;
+  },
+
   async deliveryCode(orderId: string) {
     const res = await request<{
       data: { verified: boolean; code: string | null; qr: string | null; orderNumber?: string };

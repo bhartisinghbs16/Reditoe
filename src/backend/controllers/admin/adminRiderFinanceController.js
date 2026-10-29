@@ -19,6 +19,7 @@ import RiderWithdrawal from '../../models/RiderWithdrawal.js';
 import RiderEarning from '../../models/RiderEarning.js';
 import RiderBankAccount from '../../models/RiderBankAccount.js';
 import Order from '../../models/Order.js';
+import { buildStatementData, renderRiderStatement } from '../../utils/billing/riderStatement.js';
 import {
   RIDER_DOCUMENT_TYPES,
   resolveRiderDocumentType,
@@ -443,9 +444,107 @@ export const getRiderActivity = async (req, res) => {
   }
 };
 
+const IST = '+05:30';
+const MAX_STATEMENT_DAYS = 93;
+
+/**
+ * GET /admin/riders/:id/payout-statement?from=YYYY-MM-DD&to=YYYY-MM-DD
+ *
+ * The earnings & payout statement for one partner over a billing period, as a
+ * PDF. Days are Indian days: the period runs from the start of `from` to the
+ * end of `to` in IST. Nothing is written; generating it moves no money.
+ */
+export const getRiderPayoutStatement = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ status: 'error', message: 'Invalid partner ID' });
+    }
+    const found = await findRider(id, { lean: true });
+    if (!found) {
+      return res.status(404).json({ status: 'error', message: 'Delivery partner not found' });
+    }
+
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    const toKey = day.test(String(req.query.to || '')) ? req.query.to
+      : new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const fromKey = day.test(String(req.query.from || '')) ? req.query.from
+      : new Date(Date.parse(`${toKey}T00:00:00${IST}`) - 6 * 86400000)
+        .toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const from = new Date(`${fromKey}T00:00:00${IST}`);
+    const to = new Date(`${toKey}T23:59:59.999${IST}`);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+      return res.status(400).json({ status: 'error', message: 'Choose a valid billing period' });
+    }
+    if ((to - from) / 86400000 > MAX_STATEMENT_DAYS) {
+      return res.status(400).json({
+        status: 'error',
+        message: `A statement covers at most ${MAX_STATEMENT_DAYS} days`,
+      });
+    }
+
+    const riderId = new mongoose.Types.ObjectId(id);
+    const range = { $gte: from, $lte: to };
+    const [earnings, wallet, withdrawals, bank, assigned, cancelled, rejected, escalated] =
+      await Promise.all([
+        RiderEarning.find({ riderId, createdAt: range })
+          .sort({ createdAt: 1 })
+          .populate('orderId', 'orderNumber tip')
+          .lean(),
+        RiderWallet.findOne({ riderId }).lean(),
+        RiderWithdrawal.find({ riderId, status: 'completed', processedAt: range })
+          .sort({ processedAt: 1 })
+          .lean(),
+        RiderBankAccount.findOne({ riderId }).sort({ createdAt: -1 }).lean(),
+        Order.countDocuments({ riderId, createdAt: range }),
+        Order.countDocuments({ riderId, createdAt: range, status: 'Cancelled' }),
+        Order.countDocuments({ declinedRiderIds: riderId, createdAt: range }),
+        Order.countDocuments({ riderId, createdAt: range, disputeStatus: { $in: ['open', 'resolved'] } }),
+      ]);
+
+    const bonus = (wallet?.bonusLedger || [])
+      .filter((e) => e.type === 'converted' && e.at >= from && e.at <= to)
+      .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+    const data = buildStatementData({
+      rider: found.doc,
+      period: { from, to, generatedAt: new Date() },
+      earnings: earnings.map((e) => ({
+        ...e,
+        orderNumber: e.orderId?.orderNumber || '',
+        tip: e.orderId?.tip || 0,
+      })),
+      bonus,
+      withdrawals,
+      bank: bank || found.doc.bankDetails || {},
+      stats: {
+        total: assigned + rejected,
+        accepted: assigned,
+        rejected,
+        cancelled,
+        escalations: escalated,
+      },
+    });
+
+    const pdf = renderRiderStatement(data);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="payout-statement-${data.partner.partnerId}-${fromKey}_${toKey}.pdf"`
+    );
+    res.setHeader('Content-Length', pdf.length);
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.send(pdf);
+  } catch (error) {
+    console.error('[payout-statement] failed:', error?.message || error);
+    return res.status(500).json({ status: 'error', message: 'Could not generate the payout statement' });
+  }
+};
+
 export default {
   getRiderDocuments,
   updateRiderDocument,
   getRiderPayouts,
   getRiderActivity,
+  getRiderPayoutStatement,
 };
