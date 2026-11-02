@@ -394,28 +394,32 @@ function drawStatementPage(doc, d) {
     labelX: 310.8, colon: 385.5, valueX: 392, rowsY: 161.2, pitch: 10.5,
   });
 
-  // The six order boxes. The template draws them by hand, so their edges are not quite square;
-  // they are kept as drawn.
-  rect(doc, 62.2, 260.9, 490, 52.6, { fill: COLOR.white, stroke: COLOR.black });
-  const boxes = [
-    [61.0, 260.9, 83.8, 52.6, 'Total Orders', 67.9, 269.1, d.counts.total],
-    [145.8, 260.4, 83.9, 50.9, 'Completed Orders', 152.8, 268.7, d.counts.completed],
-    [230.3, 261.2, 83.9, 52.6, 'Cancelled orders', 237.2, 269.6, d.counts.cancelled],
-    [315.2, 261.7, 83.8, 52.1, 'Refunded orders', 322.2, 270.0, d.counts.refunded],
-    [400.1, 261.2, 83.9, 50.0],
-    [479.2, 261.2, 73.0, 49.2],
+  // The six order boxes: one outer frame split into six equal cells, all the same height.
+  const strip = { x: 62.2, y: 260.9, w: 490, h: 52.6 };
+  const cell = strip.w / 6;
+  const cells = [
+    ['Total Orders', d.counts.total],
+    ['Completed Orders', d.counts.completed],
+    ['Cancelled orders', d.counts.cancelled],
+    ['Refunded orders', d.counts.refunded],
+    [],
+    [],
   ];
-  boxes.forEach(([x, y, w, h, label, lx, ly, value]) => {
-    rect(doc, x, y, w, h, { fill: COLOR.white, stroke: COLOR.black });
+  rect(doc, strip.x, strip.y, strip.w, strip.h, { fill: COLOR.white, stroke: COLOR.black });
+  cells.forEach(([label, value], i) => {
+    const x = strip.x + i * cell;
+    if (i > 0) rect(doc, x, strip.y, 0, strip.h, { stroke: COLOR.black });
     if (!label) return;
-    text(doc, label, lx, ly, { size: 7.5, color: SLATE });
-    text(doc, String(value), lx, y + h - 15, { size: 14.1, bold: true, color: SLATE });
+    text(doc, label, x + 5.7, strip.y + 8.2, { size: 7.5, color: SLATE });
+    text(doc, String(value), x + 5.7, strip.y + strip.h - 15, { size: 14.1, bold: true, color: SLATE });
   });
 
   // Payment mode wise orders.
+  // One frame with a rule under the title and another under the column heads.
   rect(doc, 62.2, 321.7, 247.8, 100.8, { fill: COLOR.white, stroke: COLOR.black });
-  rect(doc, 62.5, 323.8, 247.8, 37.7, { fill: COLOR.white, stroke: COLOR.black });
-  rect(doc, 62.2, 322.6, 247.4, 15.5, { fill: COLOR.white, stroke: COLOR.black });
+  doc.setDrawColor(COLOR.black);
+  doc.line(62.2, 337.4, 310, 337.4);
+  doc.line(62.2, 361.5, 310, 361.5);
   text(doc, 'Payment Mode Wise Orders', 155.35, 330.8, { size: 7.5, align: 'center' });
   [['Payment Mode', 69.5], ['Orders', 121.8], ['Amount', 183.4], ['percentage', 242.4]]
     .forEach(([label, x]) => text(doc, label, x, 350.15, { size: 4.7 }));
