@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, Pressable, ScrollView, View } from "react-native";
+import { Alert, Linking, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -40,6 +40,19 @@ const PERIODS: Record<PeriodKey, { label: string; since: () => number | null }> 
   "30d": { label: "Last 30 days", since: () => Date.now() - 30 * DAY },
   "90d": { label: "Last 90 days", since: () => Date.now() - 90 * DAY },
   all: { label: "All time", since: () => null },
+};
+
+/**
+ * The statement PDF covers a bounded date range, and "All time" has no start,
+ * so it is the longest the server will produce - the last 365 days. Dates are
+ * India dates, which is what the server reads them as.
+ */
+const IST_OFFSET = 5.5 * 60 * 60 * 1000;
+const indiaDate = (ms: number) => new Date(ms + IST_OFFSET).toISOString().slice(0, 10);
+const statementRange = (key: PeriodKey) => {
+  const now = Date.now();
+  const since = PERIODS[key].since() ?? now - 365 * DAY;
+  return { from: indiaDate(since), to: indiaDate(now) };
 };
 
 type Tab = "transactions" | "history" | "requests";
@@ -264,6 +277,28 @@ function Ledger() {
   const [period, setPeriod] = React.useState<PeriodKey>("30d");
   const [kind, setKind] = React.useState<string>("all");
   const [pickerOpen, setPickerOpen] = React.useState<null | "period" | "kind">(null);
+  const [opening, setOpening] = React.useState(false);
+
+  /**
+   * Open the earnings & payout statement for the chosen period. The server
+   * hands back a link that works for ten minutes, which the phone's own PDF
+   * viewer opens - the same way a customer opens an invoice.
+   */
+  const openStatement = async () => {
+    setOpening(true);
+    try {
+      const { from, to } = statementRange(period);
+      const link = await api.get<{ url: string }>(`/vendor/statement-link?from=${from}&to=${to}`);
+      await Linking.openURL(link.url);
+    } catch (error) {
+      Alert.alert(
+        "Couldn't open the statement",
+        error instanceof Error ? error.message : "Please try again."
+      );
+    } finally {
+      setOpening(false);
+    }
+  };
 
   /** The types actually present, so the picker offers nothing that is absent. */
   const kinds = React.useMemo(
@@ -328,6 +363,18 @@ function Ledger() {
           onPress={() => setPickerOpen((open) => (open === "kind" ? null : "kind"))}
         />
       </View>
+
+      <Pressable
+        onPress={openStatement}
+        disabled={opening}
+        className="mx-3 mb-3 flex-row items-center gap-2 rounded-card border border-line px-3 py-2.5 active:opacity-70"
+      >
+        <Ionicons name="document-text-outline" size={16} color={colors.indigo[600]} />
+        <Txt size="tiny" weight="semibold" tone="indigo" className="flex-1">
+          {opening ? "Preparing statement…" : `Download earnings statement · ${PERIODS[period].label}`}
+        </Txt>
+        <Ionicons name="download-outline" size={16} color={colors.indigo[600]} />
+      </Pressable>
 
       {pickerOpen === "period" && (
         <View className="mx-3 mb-2 overflow-hidden rounded-card border border-line">

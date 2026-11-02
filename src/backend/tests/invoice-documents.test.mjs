@@ -202,3 +202,35 @@ test('admin generates a rider payout statement for a period', async () => {
   const bad = await get(`/admin/riders/${rider._id}/payout-statement?from=2026-10-30&to=2026-10-01`, tok.admin);
   assert.equal(bad.status, 400);
 });
+
+test('vendor downloads the 4-page earnings statement for a period', async () => {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const res = await get(`/api/vendor/statement?from=${today}&to=${today}`, tok.vendor);
+  // Statement, tax invoice, day-wise sheet, order-wise sheet.
+  isPdf(res, 4);
+  keep('vendor-statement.pdf', res.body);
+});
+
+test('vendor statement link opens without a login header and refuses a bad token', async () => {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const link = await request(app)
+    .get(`/api/vendor/statement-link?from=${today}&to=${today}`)
+    .set('Authorization', `Bearer ${tok.vendor}`);
+  assert.equal(link.status, 200);
+  isPdf(await get(new URL(link.body.data.url).pathname), 4);
+  assert.equal((await get('/api/vendor/statement-file/not-a-token')).status, 401);
+  // An invoice link is not a statement link.
+  const invoice = await request(app)
+    .get(`/api/orders/${delivered._id}/invoice-link`)
+    .set('Authorization', `Bearer ${tok.customer}`);
+  const token = new URL(invoice.body.data.url).pathname.split('/').pop();
+  assert.equal((await get(`/api/vendor/statement-file/${token}`)).status, 401);
+});
+
+test('vendor statement rejects a backwards or oversized period, and customers', async () => {
+  assert.equal((await get('/api/vendor/statement?from=2026-10-30&to=2026-10-01', tok.vendor)).status, 400);
+  assert.equal((await get('/api/vendor/statement?from=2024-01-01&to=2026-10-01', tok.vendor)).status, 400);
+  assert.equal((await get('/api/vendor/statement?from=oct&to=nov', tok.vendor)).status, 400);
+  const asCustomer = await get('/api/vendor/statement', tok.customer);
+  assert.ok([401, 403, 404].includes(asCustomer.status), `customer got ${asCustomer.status}`);
+});

@@ -72,6 +72,25 @@ export const verifyInvoiceLinkToken = (token) => {
   return decoded;
 };
 
+/**
+ * A short-lived link to one restaurant's earnings statement for one period.
+ * Like the invoice link it carries no `id` claim, so it is not a login token,
+ * and it is good for ten minutes - long enough for the phone's PDF viewer to
+ * fetch it, short enough that a leaked URL is not an open door.
+ */
+export const signStatementLinkToken = ({ restaurantId, userId, from, to }) =>
+  jwt.sign(
+    { purpose: 'vendor-statement', restaurantId: String(restaurantId), userId: String(userId), from, to },
+    JWT_SECRET_FINAL,
+    { expiresIn: '10m' }
+  );
+
+export const verifyStatementLinkToken = (token) => {
+  const decoded = jwt.verify(token, JWT_SECRET_FINAL);
+  if (decoded?.purpose !== 'vendor-statement') throw new Error('Not a statement link');
+  return decoded;
+};
+
 export const verifyToken = (token) => {
   const tokenFingerprint = generateTokenFingerprint(token);
   

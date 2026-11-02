@@ -54,6 +54,11 @@ import {
   deleteCombo
 } from '../controllers/vendor/comboController.js';
 import { registerVendor } from '../controllers/user/authController.js';
+import {
+  downloadVendorStatement,
+  createVendorStatementLink,
+  downloadStatementByLink,
+} from '../controllers/billingDocumentController.js';
 import { protect } from '../middleware/auth.js';
 import { vendorAuth } from '../middleware/vendorAuth.js';
 import { requireApprovedVendor } from '../middleware/requireApprovedVendor.js';
@@ -151,6 +156,8 @@ router.post(
   uploadSheet.single('file'),
   importMenu
 );
+// GET /api/vendor/statement-file/:token - the signed link the app opens; no login header, the token is the proof
+router.get('/statement-file/:token', downloadStatementByLink);
 router.get('/kyc/status', protect, vendorAuth, getKycStatus);
 router.delete('/kyc/:documentType', protect, vendorAuth, deleteKycDocument);
 
@@ -163,6 +170,12 @@ router.use(protect, vendorAuth, requireApprovedVendor);
 
 // GET /api/vendor/orders - Get vendor orders (with optional status filter)
 router.get('/orders', protect, vendorAuth, getVendorOrders);
+
+// GET /api/vendor/statement?from=&to= - earnings & payout statement PDF for a period
+router.get('/statement', protect, vendorAuth, downloadVendorStatement);
+
+// GET /api/vendor/statement-link?from=&to= - a short-lived link to that PDF for the system viewer
+router.get('/statement-link', protect, vendorAuth, createVendorStatementLink);
 
 // GET /api/vendor/orders/:orderId/invoice - Download order invoice PDF
 router.get('/orders/:orderId/invoice', protect, vendorAuth, downloadOrderInvoice);
