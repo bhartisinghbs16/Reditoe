@@ -216,6 +216,12 @@ export function OrderCard({
                 >
                   x{line.quantity}
                 </span>
+                <span
+                  data-numeric
+                  className="w-16 shrink-0 text-right text-[0.8125rem] font-medium"
+                >
+                  {currency(line.price * line.quantity, true)}
+                </span>
               </li>
             ))}
           </ul>
@@ -223,6 +229,12 @@ export function OrderCard({
             <span className="text-muted-foreground">Total Items</span>
             <span data-numeric className="font-semibold">
               {order.itemCount}
+            </span>
+          </div>
+          <div className="flex items-center justify-between pt-1 text-[0.8125rem]">
+            <span className="text-muted-foreground">GST</span>
+            <span data-numeric className="font-semibold">
+              {currency(order.tax, true)}
             </span>
           </div>
         </div>

@@ -1164,7 +1164,7 @@ export const getMyOrders = async (req, res) => {
      * order. The vendor and admin lists already excluded it; this one didn't.
      */
     const orders = await Order.find({ userId, status: { $ne: 'Payment Pending' } })
-      .populate('restaurantId', 'name image rating deliveryTime deliveryFee address currentPrepTimeMinutes deliveryBufferMinutes')
+      .populate('restaurantId', 'name image rating deliveryTime deliveryFee address phone currentPrepTimeMinutes deliveryBufferMinutes')
       .populate('riderId', 'name phone rating currentRating image profileImage')
       .populate('items.foodItemId', 'name image price')
       .sort({ createdAt: -1 });
@@ -1242,8 +1242,12 @@ export const getMyOrders = async (req, res) => {
 export const cancelOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { reason, status } = req.body;
+    const { reason } = req.body;
     const userId = req.user.id;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ success: false, message: 'Invalid order ID' });
+    }
 
     const order = await Order.findById(orderId);
 
@@ -1289,9 +1293,12 @@ export const cancelOrder = async (req, res) => {
     const updatedOrder = await Order.findByIdAndUpdate(
       orderId,
       {
-        status: status || 'Cancelled',
+        // Always 'Cancelled'. This used to take whatever status the request
+        // named, so a customer could move their own order to 'Delivered'.
+        status: 'Cancelled',
         paymentStatus: wasPaid ? 'paid' : 'failed',
-        cancellationReason: reason || 'Cancelled by user',
+        cancelledBy: req.user._id,
+        cancellationReason: String(reason || 'Cancelled by user').slice(0, 200),
         $push: {
           timeline: {
             status: 'Cancelled',
@@ -1302,6 +1309,22 @@ export const cancelOrder = async (req, res) => {
       },
       { new: true }
     );
+
+    // The restaurant, the admin console and the customer's own screens hear
+    // about it at once instead of on their next poll.
+    try {
+      const restaurant = await Restaurant.findById(order.restaurantId).select('name address owner');
+      websocketService.emitOrderLifecycle({
+        order: updatedOrder,
+        eventName: 'order_cancelled',
+        source: 'customer',
+        userId: String(order.userId),
+        vendorId: restaurant?.owner ? String(restaurant.owner) : null,
+        restaurant,
+      });
+    } catch (err) {
+      console.error('[CustomerCancelBroadcastError]', err?.message || err);
+    }
 
     let refundRaised = null;
     if (wasPaid) {

@@ -815,6 +815,30 @@ export const updateRestaurant = async (req, res) => {
       message: 'Restaurant updated successfully',
       data: {
         restaurant,
+    // Checked here so a bad value comes back as a plain 400 the form can show,
+    // instead of a validation error from deep in the save.
+    if (allowedUpdates.name !== undefined && !String(allowedUpdates.name).trim()) {
+      return res.status(400).json({ status: 'error', message: 'The restaurant needs a name.' });
+    }
+    if (
+      allowedUpdates.phone !== undefined &&
+      allowedUpdates.phone !== '' &&
+      !/^[0-9+\-\s]{10,15}$/.test(String(allowedUpdates.phone))
+    ) {
+      return res.status(400).json({ status: 'error', message: 'Enter a valid phone number.' });
+    }
+    const gst = allowedUpdates.gstInfo?.gstNumber;
+    if (
+      gst !== undefined &&
+      gst !== '' &&
+      !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/i.test(String(gst))
+    ) {
+      return res.status(400).json({ status: 'error', message: 'That GST number is not valid.' });
+    }
+    if (allowedUpdates.foodType !== undefined && !['veg', 'non-veg', 'both'].includes(allowedUpdates.foodType)) {
+      return res.status(400).json({ status: 'error', message: 'Restaurant type must be veg, non-veg or both.' });
+    }
+
       },
     });
   } catch (error) {

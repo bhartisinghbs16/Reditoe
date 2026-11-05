@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Badge, Button, Card, Divider, Txt, colors } from "@/components/ui";
 import { Photo } from "@/components/photo";
+import { PickupDoneButton, confirmReject } from "@/components/pickup-done";
 import { ago, minutesSince, money, time } from "@/lib/format";
 import { img } from "@/lib/images";
 import { categoryTint, stageStyle, tints } from "@/lib/theme";
@@ -48,10 +49,25 @@ function CustomerBlock({ order }: { order: VendorOrder }) {
 
 function ItemsBlock({ order }: { order: VendorOrder }) {
   const count = order.lines.reduce((sum, line) => sum + line.quantity, 0);
+  const itemsTotal = order.lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
+  const subtotal = itemsTotal || order.subtotal;
+  const cod = order.payment === "COD";
   return (
     <View className="p-3.5">
+      {/* Item | Qty | Amount, as the restaurant's own bill reads. */}
+      <View className="flex-row items-center pb-1">
+        <Txt size="micro" tone="muted" weight="semibold" className="flex-1">
+          Item
+        </Txt>
+        <Txt size="micro" tone="muted" weight="semibold" className="w-9 text-center">
+          Qty
+        </Txt>
+        <Txt size="micro" tone="muted" weight="semibold" className="w-16 text-right">
+          Amount
+        </Txt>
+      </View>
       {order.lines.map((line, index) => (
-        <View key={index} className="flex-row items-center gap-2.5 py-1">
+        <View key={index} className="flex-row items-center gap-2 py-1">
           <Photo
             uri={line.image}
             width={30}
@@ -69,18 +85,45 @@ function ItemsBlock({ order }: { order: VendorOrder }) {
               </Txt>
             )}
           </View>
-          <Txt size="tiny" tone="muted">
-            x{line.quantity}
+          <Txt size="tiny" tone="muted" className="w-9 text-center">
+            {line.quantity}
+          </Txt>
+          <Txt size="tiny" weight="semibold" className="w-16 text-right">
+            {money(line.price * line.quantity)}
           </Txt>
         </View>
       ))}
       <Divider className="my-2" />
-      <View className="flex-row items-center justify-between">
+      <View className="flex-row items-center justify-between py-0.5">
         <Txt size="tiny" tone="muted">
-          Total Items
+          Items ({count})
         </Txt>
         <Txt size="tiny" weight="semibold">
-          {count}
+          {money(subtotal)}
+        </Txt>
+      </View>
+      <View className="flex-row items-center justify-between py-0.5">
+        <Txt size="tiny" tone="muted">
+          GST
+        </Txt>
+        <Txt size="tiny" weight="semibold">
+          {money(order.foodGst)}
+        </Txt>
+      </View>
+      <View className="flex-row items-center justify-between py-0.5">
+        <Txt size="sm" weight="bold">
+          Total
+        </Txt>
+        <Txt size="sm" weight="bold">
+          {money(subtotal + order.foodGst)}
+        </Txt>
+      </View>
+      <View className="mt-1.5 flex-row items-center justify-between">
+        <Txt size="tiny" tone="muted">
+          Payment
+        </Txt>
+        <Txt size="tiny" weight="bold" tone={cod ? "info" : "ok"}>
+          {cod ? "COD" : order.paid ? "Prepaid" : "Online (unpaid)"}
         </Txt>
       </View>
     </View>
@@ -204,7 +247,7 @@ function MoneyBlock({ order }: { order: VendorOrder }) {
             accent="brand"
             size="sm"
             className="flex-1"
-            onPress={() => advance(order.id, "cancelled")}
+            onPress={() => confirmReject(advance, order.id)}
           />
           <Button
             label="Accept Order"
@@ -217,18 +260,9 @@ function MoneyBlock({ order }: { order: VendorOrder }) {
         </View>
       )}
 
-      {/* A ready order is handed over through the verification screen, not by
-          tapping "done" — the six-digit code is the handover record. */}
-      {order.stage === "ready" && (
-        <Button
-          label="Verify Pickup"
-          icon="qr-code-outline"
-          variant="outline"
-          accent="indigo"
-          size="sm"
-          onPress={() => router.push(`/pickup?id=${order.id}`)}
-        />
-      )}
+      {/* Once the delivery partner has the bag, one tap tells the whole
+          platform. It replaces the old code-verification screen. */}
+      {order.stage === "ready" && <PickupDoneButton orderId={order.id} />}
 
       {next && order.stage !== "new" && order.stage !== "ready" && (
         <Button

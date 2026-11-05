@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { PageBar } from "@/components/screen-header";
+import { PickupDoneButton, confirmReject } from "@/components/pickup-done";
 import { Photo } from "@/components/photo";
 import {
   Badge,
@@ -17,9 +18,7 @@ import {
   Txt,
   colors,
 } from "@/components/ui";
-import QRCode from "react-native-qrcode-svg";
 import { ago, money, time } from "@/lib/format";
-import { usePickupCode } from "@/lib/pickup";
 import { img } from "@/lib/images";
 import { categoryTint, stageStyle } from "@/lib/theme";
 import {
@@ -262,6 +261,14 @@ function Bill({ order }: { order: VendorOrder }) {
             {money(totals.total)}
           </Txt>
         </View>
+        <View className="mt-2 flex-row justify-between">
+          <Txt size="sm" tone="soft">
+            Payment Method
+          </Txt>
+          <Txt size="sm" weight="bold" tone={order.payment === "COD" ? "info" : "ok"}>
+            {order.payment === "COD" ? "COD" : order.paid ? "Prepaid" : "Online (unpaid)"}
+          </Txt>
+        </View>
       </View>
     </Panel>
   );
@@ -323,7 +330,7 @@ function ContextCards({ order }: { order: VendorOrder }) {
 
       {/* "picked" as well as "ready", so the vendor gets the confirmation that
           the handover went through rather than the card simply vanishing. */}
-      {(order.stage === "ready" || order.stage === "picked") && <PickupCode order={order} />}
+      {(order.stage === "ready" || order.stage === "picked") && <PickupStatus order={order} />}
 
       <Card className="p-4">
         <View className="flex-row items-center gap-2">
@@ -379,17 +386,11 @@ function Detail({
 }
 
 /**
- * The handover proof, on the order it belongs to.
- *
- * The code was only ever reachable from a separate Pickup Verification
- * screen, so a vendor looking at a ready order saw nothing to show the rider
- * — which is what the client reported. The order is the place it is needed.
+ * Pickup, on the order it belongs to: a ready order gets one "Pickup Done"
+ * button, and once collected it shows the confirmation instead.
  */
-function PickupCode({ order }: { order: VendorOrder }) {
-  const router = useRouter();
-  const { code, qr, verified, error, loading } = usePickupCode(order.id);
-
-  if (verified) {
+function PickupStatus({ order }: { order: VendorOrder }) {
+  if (order.stage === "picked") {
     return (
       <Card className="p-4">
         <View className="flex-row items-center gap-2">
@@ -397,69 +398,23 @@ function PickupCode({ order }: { order: VendorOrder }) {
           <Txt weight="bold">Picked up</Txt>
         </View>
         <Txt size="tiny" tone="muted" className="mt-2">
-          The delivery partner verified this order and collected it.
+          The delivery partner has collected this order.
         </Txt>
       </Card>
     );
   }
-
   return (
     <Card className="p-4">
       <View className="flex-row items-center gap-2">
-        <IconPlate icon="qr-code-outline" tint="violet" size={30} shape="square" />
+        <IconPlate icon="bag-check-outline" tint="violet" size={30} shape="square" />
         <View className="min-w-0 flex-1">
-          <Txt weight="bold">Pickup Code</Txt>
+          <Txt weight="bold">Hand over to rider</Txt>
           <Txt size="tiny" tone="muted">
-            Show this to the delivery partner
+            Tap once the delivery partner has taken the order
           </Txt>
         </View>
       </View>
-
-      {loading && !code ? (
-        <Txt size="tiny" tone="muted" className="mt-3">
-          Loading the code…
-        </Txt>
-      ) : error ? (
-        <Txt size="tiny" className="mt-3 text-bad-ink">
-          {error}
-        </Txt>
-      ) : (
-        <>
-          <View className="mt-3 flex-row items-center justify-center gap-2">
-            {(code ?? "----").split("").map((digit, index) => (
-              <View
-                key={index}
-                className="h-12 w-11 items-center justify-center rounded-tile border border-line bg-surface-sunken"
-              >
-                <Txt size="xl" weight="bold" tone="indigo">
-                  {digit}
-                </Txt>
-              </View>
-            ))}
-          </View>
-
-          {qr ? (
-            <View className="mt-3 items-center">
-              <View className="rounded-card border border-line bg-surface p-2.5">
-                <QRCode value={qr} size={128} />
-              </View>
-              <Txt size="micro" tone="muted" className="mt-1.5">
-                Or let them scan this
-              </Txt>
-            </View>
-          ) : null}
-
-          <Button
-            label="Open Pickup Verification"
-            icon="scan-outline"
-            variant="outline"
-            accent="indigo"
-            size="sm"
-            className="mt-3"
-            onPress={() => router.push(`/pickup?id=${order.id}`)}
-          />
-        </>
-      )}
+      <PickupDoneButton orderId={order.id} className="mt-3" />
     </Card>
   );
 }
@@ -567,17 +522,21 @@ export default function OrderDetails() {
             />
           )}
           <View className="flex-row gap-2.5">
+            {(order.stage === "new" || order.stage === "preparing" || order.stage === "ready") && (
             <Button
               label="Cancel Order"
               icon="close-circle-outline"
               variant="outline"
               accent="brand"
               className="flex-1"
-              onPress={() => {
-                advance(order.id, "cancelled");
-                router.back();
-              }}
+              onPress={() =>
+                confirmReject((id, stage, reason) => {
+                  advance(id, stage, reason);
+                  router.back();
+                }, order.id)
+              }
             />
+            )}
             <Button
               label="Need Help?"
               icon="headset-outline"

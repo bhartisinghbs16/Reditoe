@@ -2,6 +2,7 @@ import Restaurant from '../models/Restaurant.js';
 import { DOCUMENT_TYPES } from '../utils/restaurantDocuments.js';
 import { uploadedFileUrl } from '../config/s3Upload.js';
 import Order, { deriveOrderNumberFromId } from '../models/Order.js';
+import { findOrCreateRefundRequest } from '../utils/refundRequests.js';
 import User from '../models/User.js';
 import FoodItem from '../models/FoodItem.js';
 import FileUpload from '../models/FileUpload.js';
@@ -1064,6 +1065,12 @@ export const updateOrderStatus = async (req, res) => {
 
       // Update status
       order.status = status;
+
+      if (status === 'Cancelled') {
+        const reason = String(req.body.reason || '').trim().slice(0, 200);
+        order.cancellationReason = reason || 'Rejected by the restaurant';
+        order.cancelledBy = req.user?._id;
+      }
       
       // When status is set to 'Ready', ensure riderId is null (order available for riders)
       if (status === 'Ready' && order.riderId) {
@@ -1077,7 +1084,9 @@ export const updateOrderStatus = async (req, res) => {
         'Ready': 'Order is ready for shipment',
         'OnWay': 'Order is out for delivery',
         'Delivered': 'Order has been delivered',
-        'Cancelled': 'Order has been cancelled',
+        'Cancelled': order.cancellationReason
+          ? `Order cancelled by the restaurant: ${order.cancellationReason}`
+          : 'Order has been cancelled',
       };
 
       order.timeline.push({
@@ -1095,6 +1104,30 @@ export const updateOrderStatus = async (req, res) => {
     // Save the order
     await order.save();
     await closeOrderCommunicationIfNeeded(order._id);
+
+    // A paid order the restaurant turns away is owed back. Raised for the
+    // admin console to approve, like a customer's own cancellation.
+    if (status === 'Cancelled' && order.paymentStatus === 'paid') {
+      try {
+        await findOrCreateRefundRequest({
+          orderId: order._id,
+          userId: order.userId,
+          refundAmount: Number(order.total),
+          refundReason: `Order rejected by restaurant: ${order.cancellationReason}`,
+          refundMethod: order.paymentMethod === 'wallet' ? 'wallet' : 'original_payment',
+          refundTimeline: [
+            {
+              status: 'requested',
+              timestamp: new Date(),
+              message: `Raised automatically when the restaurant rejected the order: ₹${order.total}`,
+              updatedBy: order.userId,
+            },
+          ],
+        });
+      } catch (err) {
+        console.error('[VendorCancelRefundError]', err?.message || err);
+      }
+    }
     
     const savedOrder = await Order.findById(order._id);
     if (status === 'Ready' && savedOrder?.riderId) {

@@ -112,11 +112,24 @@ function QuickStat({
   );
 }
 
+const FOOD_TYPES = [
+  { value: "veg", label: "Pure veg" },
+  { value: "non-veg", label: "Non-veg" },
+  { value: "both", label: "Veg & non-veg" },
+];
+
 /** One field in an edit dialog. `path` is where it sits on the restaurant. */
 interface EditField {
   path: string;
   label: string;
   multiline?: boolean;
+  /** A fixed set of choices, drawn as a dropdown. */
+  options?: { value: string; label: string }[];
+  /** Upper-cased and trimmed before saving (GST numbers, licence numbers). */
+  upper?: boolean;
+  /** Returns a message when the typed value is not acceptable; empty is always allowed. */
+  check?: (value: string) => string | null;
+  placeholder?: string;
 }
 
 /**
@@ -176,7 +189,25 @@ function EditAction({
           {fields.map((field) => (
             <div key={field.path} className="space-y-1.5">
               <Label htmlFor={field.path}>{field.label}</Label>
-              {field.multiline ? (
+              {field.options ? (
+                <select
+                  id={field.path}
+                  value={draft[field.path] ?? ""}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      [field.path]: event.target.value,
+                    }))
+                  }
+                  className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                >
+                  {field.options.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              ) : field.multiline ? (
                 <Textarea
                   id={field.path}
                   rows={3}
@@ -191,6 +222,7 @@ function EditAction({
               ) : (
                 <Input
                   id={field.path}
+                  placeholder={field.placeholder}
                   value={draft[field.path] ?? ""}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -218,6 +250,19 @@ function EditAction({
                * the server as { address: { city } }, or a flat key of that
                * name would be written beside the address rather than into it.
                */
+              for (const field of fields) {
+                const typed = (draft[field.path] ?? "").trim();
+                const problem = typed ? field.check?.(typed) : null;
+                if (problem) {
+                  toast.error(problem);
+                  return;
+                }
+              }
+              if (fields.some((field) => field.path === "name") && !(draft.name ?? "").trim()) {
+                toast.error("The restaurant needs a name.");
+                return;
+              }
+
               const body: Record<string, unknown> = {};
               for (const field of fields) {
                 const parts = field.path.split(".");
@@ -229,7 +274,8 @@ function EditAction({
                   };
                   target = target[part] as Record<string, unknown>;
                 }
-                target[parts[parts.length - 1]] = draft[field.path]?.trim() ?? "";
+                const typed = draft[field.path]?.trim() ?? "";
+                target[parts[parts.length - 1]] = field.upper ? typed.toUpperCase() : typed;
               }
 
               try {
@@ -483,18 +529,54 @@ function Overview({ restaurant }: { restaurant: Restaurant }) {
                 fields={[
                   { path: "name", label: "Restaurant name" },
                   { path: "description", label: "Description", multiline: true },
+                  {
+                    path: "phone",
+                    label: "Restaurant phone",
+                    placeholder: "10-digit mobile or landline",
+                    check: (value) =>
+                      /^[0-9+\-\s]{10,15}$/.test(value) ? null : "Enter a valid phone number.",
+                  },
+                  {
+                    path: "foodType",
+                    label: "Restaurant type",
+                    options: FOOD_TYPES,
+                  },
+                  { path: "openingHours", label: "Opening hours", placeholder: "9:00 AM - 11:00 PM" },
+                  {
+                    path: "gstInfo.gstNumber",
+                    label: "GST number",
+                    upper: true,
+                    placeholder: "15-character GSTIN",
+                    check: (value) =>
+                      /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/i.test(value)
+                        ? null
+                        : "That GST number is not valid (it should be 15 characters, e.g. 22AAAAA0000A1Z5).",
+                  },
+                  {
+                    path: "foodLicenseNumber",
+                    label: "FSSAI / food licence number",
+                    upper: true,
+                    check: (value) =>
+                      /^[0-9A-Z]{8,20}$/i.test(value) ? null : "Enter a valid licence number.",
+                  },
+                  { path: "upiId", label: "UPI ID", placeholder: "name@bank" },
                 ]}
               />
             }
           >
             <Row label="Restaurant Name" value={restaurant.name} />
             <Row label="Restaurant Code" value={code} />
-            <Row label="Tagline" />
             <Row label="Description" value={restaurant.description} />
+            <Row label="Phone" value={restaurant.phone ? formatPhone(restaurant.phone) : undefined} />
             <Row label="Established On" value={formatDate(restaurant.createdAt)} />
-            <Row label="Restaurant Type" />
-            <Row label="GST Number" />
-            <Row label="PAN Number" />
+            <Row
+              label="Restaurant Type"
+              value={FOOD_TYPES.find((type) => type.value === restaurant.foodType)?.label}
+            />
+            <Row label="Opening Hours" value={restaurant.openingHours} />
+            <Row label="GST Number" value={restaurant.gstInfo?.gstNumber} />
+            <Row label="FSSAI / Licence" value={restaurant.foodLicenseNumber} />
+            <Row label="UPI ID" value={restaurant.upiId} />
           </Panel>
 
           <Panel title="Contact Person">

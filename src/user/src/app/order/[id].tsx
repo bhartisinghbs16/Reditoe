@@ -52,7 +52,7 @@ const SUPPORT_TOPICS = [
 export default function OrderDetailScreen() {
   const { id, placed } = useLocalSearchParams<{ id: string; placed?: string }>();
   const router = useRouter();
-  const { addLine, addresses, dishById, orders, restaurantById } = useStore();
+  const { addLine, addresses, cancelOrder, dishById, orders, restaurantById } = useStore();
 
   const order = orders.find((o) => o.id === id);
 
@@ -122,6 +122,11 @@ export default function OrderDetailScreen() {
   const assignedRider = track.riderInfo?.name ? track.riderInfo : null;
 
   const restaurant = restaurantById(order.restaurantId);
+  // What the order itself recorded, for when the catalogue does not list this
+  // kitchen (closed, paused, or outside the browse area).
+  const restaurantName = restaurant?.name || order.restaurantInfo?.name || "Restaurant";
+  const restaurantAddress = order.restaurantInfo?.address || "";
+  const restaurantPhone = order.restaurantInfo?.phone || "";
   const address = addresses.find((a) => a.id === order.addressId) ?? addresses[0];
   const addressStyle = addressTypeStyle[address.type];
   const justPlaced = placed === "1";
@@ -173,6 +178,42 @@ export default function OrderDetailScreen() {
   };
   const cancelled = order.status === "Cancelled" || order.status === "Refunded";
   const live = !delivered && !cancelled;
+
+  /* Cancelling: only while the kitchen has not accepted. The server decides
+     (`canCancel`) and enforces it again when the request arrives. */
+  const [cancelling, setCancelling] = React.useState(false);
+  const canCancelNow =
+    order.canCancel ??
+    ["Waiting for Confirmation", "Payment Pending"].includes(order.status);
+  const paidOnline = order.paymentMethod !== "" && order.paymentMethod.toLowerCase() !== "cod";
+
+  const confirmCancel = () =>
+    Alert.alert(
+      "Cancel this order?",
+      paidOnline
+        ? "The restaurant hasn't accepted it yet. A refund will be raised for what you paid."
+        : "The restaurant hasn't accepted it yet. This can't be undone.",
+      [
+        { text: "Keep order", style: "cancel" },
+        {
+          text: "Cancel order",
+          style: "destructive",
+          onPress: async () => {
+            setCancelling(true);
+            try {
+              await cancelOrder(order.id, "Cancelled by customer");
+            } catch (error) {
+              Alert.alert(
+                "Couldn't cancel",
+                error instanceof Error ? error.message : "Please try again."
+              );
+            } finally {
+              setCancelling(false);
+            }
+          },
+        },
+      ]
+    );
 
   const stageIndex = delivered
     ? STAGES.length - 1
@@ -304,6 +345,23 @@ export default function OrderDetailScreen() {
           )}
         </Card>
 
+        {canCancelNow && !cancelled && (
+          <Pressable
+            onPress={confirmCancel}
+            disabled={cancelling}
+            className="mx-4 mt-3 h-12 flex-row items-center justify-center gap-2 rounded-tile border border-bad active:opacity-70"
+          >
+            {cancelling ? (
+              <ActivityIndicator size="small" color={colors.bad.default} />
+            ) : (
+              <Ionicons name="close-circle-outline" size={18} color={colors.bad.default} />
+            )}
+            <Txt weight="bold" tone="bad">
+              {cancelling ? "Cancelling…" : "Cancel Order"}
+            </Txt>
+          </Pressable>
+        )}
+
         {/* Restaurant */}
         <Card className="mx-4 mt-4 flex-row items-center gap-3 p-3">
           <Photo
@@ -319,20 +377,24 @@ export default function OrderDetailScreen() {
           >
             <View className="flex-row items-center gap-1">
               <Txt weight="bold" numberOfLines={2} className="min-w-0 flex-shrink">
-                {restaurant?.name ?? "Restaurant"}
+                {restaurantName}
               </Txt>
               <Ionicons name="chevron-forward" size={14} color={colors.ink.default} />
             </View>
-            <Txt size="tiny" tone="muted" numberOfLines={1}>
-              {restaurant?.cuisines.join(", ")}
-            </Txt>
-            <View className="mt-1 flex-row items-center gap-2">
-              <Rating value={restaurant?.rating ?? 0} />
-              <View className="h-3 w-px bg-line" />
-              <Txt size="tiny" tone="muted">
-                {restaurant?.etaMinutes[0]}-{restaurant?.etaMinutes[1]} mins
+            {!!restaurant?.cuisines?.length && (
+              <Txt size="tiny" tone="muted" numberOfLines={1}>
+                {restaurant.cuisines.join(", ")}
               </Txt>
-            </View>
+            )}
+            {restaurant && (
+              <View className="mt-1 flex-row items-center gap-2">
+                <Rating value={restaurant.rating ?? 0} />
+                <View className="h-3 w-px bg-line" />
+                <Txt size="tiny" tone="muted">
+                  {restaurant.etaMinutes[0]}-{restaurant.etaMinutes[1]} mins
+                </Txt>
+              </View>
+            )}
           </Pressable>
           <Pressable
             onPress={() => router.push(`/restaurant/${order.restaurantId}`)}
@@ -342,6 +404,44 @@ export default function OrderDetailScreen() {
               View Menu
             </Txt>
           </Pressable>
+        </Card>
+
+        {/* Where the food is coming from: name, address, contact. */}
+        <Card className="mx-4 mt-4 p-3">
+          <Txt weight="bold" className="mb-2">
+            Restaurant Details
+          </Txt>
+          <View className="gap-2">
+            <View className="flex-row items-start gap-2.5">
+              <Ionicons name="storefront-outline" size={16} color={colors.ink.muted} />
+              <Txt size="sm" className="flex-1">
+                {restaurantName}
+              </Txt>
+            </View>
+            <View className="flex-row items-start gap-2.5">
+              <Ionicons name="location-outline" size={16} color={colors.ink.muted} />
+              <Txt size="sm" tone="soft" className="flex-1">
+                {restaurantAddress || "Address not available"}
+              </Txt>
+            </View>
+            <View className="flex-row items-center gap-2.5">
+              <Ionicons name="call-outline" size={16} color={colors.ink.muted} />
+              <Txt size="sm" tone="soft" className="flex-1">
+                {restaurantPhone || "Contact number not available"}
+              </Txt>
+              {!!restaurantPhone && (
+                <Pressable
+                  onPress={() => Linking.openURL(`tel:${restaurantPhone}`)}
+                  className="h-9 flex-row items-center gap-1.5 rounded-tile border border-brand-500 px-3 active:opacity-70"
+                >
+                  <Ionicons name="call" size={14} color={colors.brand[600]} />
+                  <Txt size="tiny" weight="bold" tone="brand">
+                    Call
+                  </Txt>
+                </Pressable>
+              )}
+            </View>
+          </View>
         </Card>
 
         {/* Rider */}

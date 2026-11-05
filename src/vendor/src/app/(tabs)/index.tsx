@@ -388,7 +388,6 @@ function QuickActions() {
     { label: "Add Item", icon: "add-circle-outline", href: "/item/new" },
     { label: "Offers & Coupons", icon: "pricetag-outline", href: "/offers" },
     { label: "Payouts", icon: "wallet-outline", href: "/earnings" },
-    { label: "Pickup Verify", icon: "qr-code-outline", href: "/pickup" },
     { label: "Business Profile", icon: "storefront-outline", href: "/more" },
   ];
 

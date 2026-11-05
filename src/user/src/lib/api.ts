@@ -857,7 +857,12 @@ export interface OrderChat {
 export interface ApiOrder {
   id: string;
   orderNumber?: string;
-  restaurantId?: { _id?: string; name?: string } | string | null;
+  restaurantId?: {
+    _id?: string;
+    name?: string;
+    phone?: string;
+    address?: Record<string, any> | string | null;
+  } | string | null;
   items?: Array<{
     foodItemId?: { _id?: string; name?: string; image?: string; price?: number } | string | null;
     name?: string;
@@ -1775,6 +1780,14 @@ export const api = {
    * whole window this is used in - the customer cancelled the payment sheet,
    * the card was declined, or the gateway never opened.
    */
+  async cancelOrder(orderId: string, reason: string) {
+    return request<{ success?: boolean; message?: string }>(`/orders/${orderId}/status`, {
+      method: "PATCH",
+      auth: true,
+      body: { reason },
+    });
+  },
+
   async abandonOrder(orderId: string) {
     return request<{ status: string }>(`/orders/${orderId}/pending`, {
       method: "DELETE",

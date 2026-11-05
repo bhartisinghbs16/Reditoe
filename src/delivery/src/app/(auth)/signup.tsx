@@ -1,5 +1,5 @@
 import React from "react";
-import { Pressable, View } from "react-native";
+import { ActivityIndicator, Pressable, View } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { clearDraft, loadDraft, saveDraft, type RiderDraft } from "@/lib/registration";
@@ -84,7 +84,14 @@ export default function Signup() {
     if (typeof params.ref === "string" && params.ref.trim()) setReferral(params.ref.trim().toUpperCase());
   }, [params.ref]);
 
-  if (!draft) return null;
+  // A spinner, not nothing: an empty return here is a blank screen.
+  if (!draft) {
+    return (
+      <View className="flex-1 items-center justify-center bg-surface-sunken">
+        <ActivityIndicator color={colors.brand[500]} />
+      </View>
+    );
+  }
 
   async function submit() {
     if (!draft) return;

@@ -70,11 +70,12 @@ function Group({ title, rows }: { title: string; rows: Row[] }) {
 
 function ProfileCard() {
   const { vendor } = useStore();
+  const router = useRouter();
 
   return (
     <Card className="mx-4 -mt-8 flex-row items-center gap-3 p-3.5" raised>
       <View>
-        <Photo uri={img(vendor.photo, 160)} width={62} height={62} radius={31} />
+        <Photo uri={vendor.image || img(vendor.photo, 160)} width={62} height={62} radius={31} />
         <View className="absolute -bottom-0.5 -right-0.5 h-6 w-6 items-center justify-center rounded-full border-2 border-white bg-indigo-600">
           <Ionicons name="camera" size={12} color="#ffffff" />
         </View>
@@ -97,7 +98,7 @@ function ProfileCard() {
         )}
       </View>
 
-      <ActionLink label="Edit Profile" accent="indigo" />
+      <ActionLink label="Edit Profile" accent="indigo" onPress={() => router.push("/edit-profile")} />
     </Card>
   );
 }

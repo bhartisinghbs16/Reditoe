@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
 import type { PhotoKey } from "@/lib/images";
 import type { TintName } from "@/lib/theme";
@@ -72,6 +72,8 @@ export interface VendorOrder {
   apiStatus: string;
   lines: OrderLine[];
   subtotal: number;
+  /** GST on the food alone - what the restaurant's own bill carries. */
+  foodGst: number;
   tax: number;
   deliveryFee: number;
   packaging: number;
@@ -147,6 +149,8 @@ export interface MenuItemDraft {
   /** Days of the week this item is sold on; empty means every day. */
   availableDays?: string[];
   availableTo: string;
+  /** Address of the uploaded dish photo; left out to keep whatever the item has. */
+  image?: string;
   addons: ItemAddon[];
   variants: ItemVariantGroup[];
 }
@@ -269,6 +273,8 @@ const emptyProfile = {
   address: "—",
   hours: "—",
   email: "—",
+  phone: "",
+  description: "",
   photo: "thali" as PhotoKey,
   image: undefined as string | undefined,
   verified: false,
@@ -329,7 +335,9 @@ interface StoreValue {
   storeOpen: boolean;
   setStoreOpen: (open: boolean, prepMinutes?: number) => void;
   orders: VendorOrder[];
-  advance: (id: string, stage: OrderStage) => void;
+  advance: (id: string, stage: OrderStage, reason?: string) => void;
+  /** Records that the rider has taken a ready order; resolves once the server agrees. */
+  markPickedUp: (id: string) => Promise<void>;
   menu: MenuItem[];
   toggleAvailability: (id: string) => void;
   /** Resolves to the saved item's id so the caller can navigate to it. */
@@ -365,6 +373,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [offers, setOffers] = useState<Offer[]>([]);
   const [payments, setPayments] = useState<Payments>(emptyPayments);
 
+  /** When the vendor last changed the open/closed switch (ms). */
+  const statusChangedAt = useRef(0);
+  /** When each order was last changed by the vendor here (ms), by order id. */
+  const orderChangedAt = useRef(new Map<string, number>());
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -394,6 +407,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    * loading would blink every fifteen seconds all day.
    */
   const load = useCallback(async (background = false) => {
+    // Stamped before any request leaves: a store-status change made after this
+    // moment is newer than whatever these requests come back with.
+    const startedAt = Date.now();
     if (!background) setLoading(true);
     setError(null);
     try {
@@ -421,7 +437,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
       if (restaurantResult.status === "fulfilled") {
         const raw = restaurantResult.value?.restaurant ?? restaurantResult.value;
-        setVendor(toVendorProfile(raw, session?.email ?? "—"));
+        const fresh = toVendorProfile(raw, session?.email ?? "—");
+        setVendor((current) =>
+          // A poll that was already in flight when the vendor flipped the
+          // switch carries the *old* status. Letting it land flipped the
+          // switch straight back a few seconds later.
+          statusChangedAt.current > startedAt ? { ...fresh, isOpen: current.isOpen } : fresh
+        );
       }
 
       // Orders feed the payments ledger, so hold them rather than relying on
@@ -429,7 +451,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       let loadedOrders: VendorOrder[] = [];
       if (ordersResult.status === "fulfilled") {
         loadedOrders = (ordersResult.value?.orders ?? []).map(toOrder);
-        setOrders(loadedOrders);
+        // An order the vendor changed after this fetch began is newer than
+        // what came back; keep the local copy so a tap on Accept or Reject
+        // is not undone by a poll that was already in flight.
+        const fresh = loadedOrders;
+        setOrders((current) => {
+          const merged = fresh.map((incoming) => {
+            const changed = orderChangedAt.current.get(incoming.id) ?? 0;
+            const local = changed > startedAt ? current.find((o) => o.id === incoming.id) : undefined;
+            return local ?? incoming;
+          });
+          return merged;
+        });
       }
 
       if (menuResult.status === "fulfilled") {
@@ -633,13 +666,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    */
   const setStoreOpen = useCallback(
     (open: boolean, prepMinutes?: number) => {
+      statusChangedAt.current = Date.now();
       setVendor((current) => ({ ...current, isOpen: open }));
       api
-        .patch("/vendor/restaurant/availability", {
+        .patch<any>("/vendor/restaurant/availability", {
           isOpen: open,
           ...(open ? { prepMinutes: prepMinutes ?? 20 } : {}),
         })
+        .then((saved) => {
+          // Take the server's word for where it ended up, and mark the moment
+          // so a poll that started before this reply cannot undo it.
+          statusChangedAt.current = Date.now();
+          const confirmed = saved?.restaurant?.isOpen ?? saved?.data?.restaurant?.isOpen;
+          if (typeof confirmed === "boolean") {
+            setVendor((current) => ({ ...current, isOpen: confirmed }));
+          }
+        })
         .catch((reason) => {
+          statusChangedAt.current = Date.now();
           setVendor((current) => ({ ...current, isOpen: !open }));
           setError(reason?.message ?? "Couldn't change your store status.");
         });
@@ -648,7 +692,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const advance = useCallback(
-    (id: string, stage: OrderStage) => {
+    (id: string, stage: OrderStage, reason?: string) => {
       const order = orders.find((entry) => entry.id === id);
       if (!order) return;
 
@@ -664,6 +708,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // Optimistic: the kitchen taps this mid-service and can't wait for a
       // round trip. Roll back and say so if the API disagrees.
       const previous = { stage: order.stage, apiStatus: order.apiStatus };
+      orderChangedAt.current.set(id, Date.now());
       setOrders((current) =>
         current.map((entry) =>
           entry.id === id ? { ...entry, stage, apiStatus: target } : entry
@@ -673,18 +718,41 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // The API rejects any PATCH that skips a hop, so walk the path.
       (async () => {
         for (const status of path) {
-          await api.patch(`/vendor/orders/${id}/status`, { status });
+          await api.patch(
+            `/vendor/orders/${id}/status`,
+            status === "Cancelled" && reason ? { status, reason } : { status }
+          );
         }
-      })().catch((reason) => {
+        orderChangedAt.current.set(id, Date.now());
+      })().catch((failure) => {
         setOrders((current) =>
           current.map((entry) => (entry.id === id ? { ...entry, ...previous } : entry))
         );
-        setError(reason?.message ?? "Couldn't update that order.");
+        orderChangedAt.current.set(id, Date.now());
+        setError(failure?.message ?? "Couldn't update that order.");
         // The order may have moved part-way; re-read rather than guess.
         void load();
       });
     },
     [orders, load]
+  );
+
+  const markPickedUp = useCallback(
+    async (id: string) => {
+      try {
+        await api.post(`/vendor/orders/${id}/pickup-done`, {});
+      } catch (reason: any) {
+        setError(reason?.message ?? "Couldn't record the pickup.");
+        throw reason;
+      }
+      setOrders((current) =>
+        current.map((entry) =>
+          entry.id === id ? { ...entry, stage: "picked", apiStatus: "OnWay" } : entry
+        )
+      );
+      void load(true);
+    },
+    [load]
   );
 
   const toggleAvailability = useCallback(
@@ -856,6 +924,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setStoreOpen,
       orders,
       advance,
+      markPickedUp,
       menu,
       toggleAvailability,
       saveItem,
@@ -884,6 +953,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setStoreOpen,
       orders,
       advance,
+      markPickedUp,
       menu,
       toggleAvailability,
       saveItem,

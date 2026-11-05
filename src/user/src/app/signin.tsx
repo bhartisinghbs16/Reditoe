@@ -1,5 +1,13 @@
 import React from "react";
-import { Image, Pressable, TextInput, View } from "react-native";
+import {
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  TextInput,
+  View,
+} from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -119,6 +127,8 @@ export default function SignInScreen() {
   const [notice, setNotice] = React.useState<string | null>(null);
   /** Seconds until another code can be asked for; the server sets the cooldown. */
   const [resendIn, setResendIn] = React.useState(0);
+  /** Set the moment a sign-in succeeds, so the "Your account" card never flashes. */
+  const [leaving, setLeaving] = React.useState(false);
 
   // Arriving here starts a sign-in afresh. A number half way through signing
   // up on an earlier visit must not be carried into this one.
@@ -145,8 +155,9 @@ export default function SignInScreen() {
    * somewhere inside the app.
    */
   const leave = () => {
-    if (router.canGoBack()) router.back();
-    else router.replace("/(tabs)");
+    // Always land on Home. `router.back()` could drop a freshly signed-in
+    // customer on whatever screen sat under this one (or on this very form).
+    router.replace("/(tabs)");
   };
 
   /** Back to the number, discarding a code that was meant for another one. */
@@ -168,6 +179,7 @@ export default function SignInScreen() {
     // is not possible any more (lapsed, revoked, offline) it falls through to
     // a code like any other number.
     if (knownHere && (await signInRemembered(tenDigits(phone)))) {
+      setLeaving(true);
       leave();
       return;
     }
@@ -194,6 +206,7 @@ export default function SignInScreen() {
 
     const outcome = await verifyOtp(tenDigits(phone), code);
     if (outcome === "signed-in") {
+      setLeaving(true);
       leave();
     } else if (outcome === "new") {
       // Nobody has this number yet: on to the sign-up page, which collects the
@@ -204,6 +217,8 @@ export default function SignInScreen() {
       );
     }
   };
+
+  if (leaving) return <SafeAreaView edges={["top"]} className="flex-1 bg-surface" />;
 
   if (signedIn) {
     return (
@@ -240,11 +255,25 @@ export default function SignInScreen() {
   return (
     <SafeAreaView edges={["top"]} className="flex-1 bg-[#fff7f2]">
       {/*
+        The form sits in a scroll view inside a keyboard-avoiding view, so the
+        code box (and the button under it) rides up above the keyboard instead
+        of being hidden behind it.
+      */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        className="flex-1"
+      >
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ flexGrow: 1 }}
+      >
+      {/*
         No header bar. The client asked for a single screen with nothing to
         skip past: this is the first thing a customer meets, and a "Skip" in
         the corner invites them to leave before they have arrived.
       */}
-      <View className="flex-1 justify-center pb-2">
+      <View className="flex-1 justify-center pb-6">
         {/*
           The brand first, then what the app is for, then the form on a card
           that curves up over the artwork - the shape the client's design
@@ -390,6 +419,8 @@ export default function SignInScreen() {
           </Txt>
         </Card>
       </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

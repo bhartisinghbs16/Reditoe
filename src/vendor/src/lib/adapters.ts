@@ -196,6 +196,7 @@ export function toOrder(raw: any): VendorOrder {
       };
     }),
     subtotal,
+    foodGst: Number(raw?.tax ?? 0),
     tax,
     deliveryFee,
     packaging,
@@ -288,6 +289,8 @@ export function fromMenuItemDraft(draft: MenuItemDraft) {
     // "Specific Days" has to reach the API rather than leaving last week's
     // days in place.
     availableDays: draft.availableDays ?? [],
+    // Only when a photo was chosen, so saving other edits never blanks it.
+    ...(draft.image ? { image: draft.image } : {}),
     addons: draft.addons
       .filter((addon) => addon.name.trim())
       .map((addon) => ({
@@ -537,6 +540,8 @@ export function toVendorProfile(raw: any, fallbackEmail: string) {
     address: joinAddress(address) || "No address set",
     hours: raw?.openingTime && raw?.closingTime ? `${raw.openingTime} - ${raw.closingTime}` : "—",
     email: raw?.email ?? fallbackEmail,
+    phone: String(raw?.phone ?? ""),
+    description: String(raw?.description ?? ""),
     photo: "thali" as PhotoKey,
     image: mediaUrl(raw?.image),
     workingHours: Array.isArray(raw?.workingHours) ? raw.workingHours : [],

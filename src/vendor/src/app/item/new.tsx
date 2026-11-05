@@ -29,7 +29,7 @@ import {
 } from "@/components/ui";
 import { currency, money } from "@/lib/format";
 import { photoFor } from "@/lib/adapters";
-import { img } from "@/lib/images";
+import { pickAndUploadMenuImage } from "@/lib/pick-image";
 import { categoryTint, tints, type TintName } from "@/lib/theme";
 import {
   useStore,
@@ -79,6 +79,9 @@ function ItemDetailsStep({
   setVisible,
   category,
   setCategory,
+  imageUri,
+  setImageUri,
+  fallbackName,
 }: {
   name: string;
   setName: (next: string) => void;
@@ -92,17 +95,41 @@ function ItemDetailsStep({
   setVisible: (next: boolean) => void;
   category: string;
   setCategory: (next: string) => void;
+  imageUri: string | null;
+  setImageUri: (next: string | null) => void;
+  fallbackName: string;
 }) {
+  const [uploading, setUploading] = React.useState(false);
+  const [imageError, setImageError] = React.useState<string | null>(null);
+
+  const choosePhoto = async () => {
+    if (uploading) return;
+    setImageError(null);
+    setUploading(true);
+    try {
+      const url = await pickAndUploadMenuImage();
+      if (url) setImageUri(url);
+    } catch (reason: any) {
+      setImageError(reason?.message ?? "Couldn't upload that photo.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   return (
     <View className="gap-3">
       <Card className="p-4">
         <View className="flex-row gap-3">
-          <View>
-            <Photo uri={img("curryBread", 260)} width={96} height={96} radius={10} />
+          <Pressable onPress={choosePhoto} accessibilityLabel="Choose item photo">
+            <Photo uri={imageUri || photoFor(fallbackName)} width={96} height={96} radius={10} />
             <View className="absolute bottom-1.5 right-1.5 h-7 w-7 items-center justify-center rounded-lg bg-white">
-              <Ionicons name="camera" size={14} color={colors.ink.default} />
+              {uploading ? (
+                <ActivityIndicator size="small" color={colors.ink.default} />
+              ) : (
+                <Ionicons name="camera" size={14} color={colors.ink.default} />
+              )}
             </View>
-          </View>
+          </Pressable>
           <View className="min-w-0 flex-1 gap-3">
             <TextField
               label="Item Name"
@@ -195,40 +222,40 @@ function ItemDetailsStep({
 
       <Card className="p-4">
         <Txt size="sm" weight="bold">
-          Upload Images{" "}
+          Item Photo{" "}
           <Txt size="tiny" tone="muted">
-            (Max 5 images)
+            (JPG, PNG or WEBP, up to 5 MB)
           </Txt>
         </Txt>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerClassName="gap-2.5 pt-3"
-        >
-          {[0, 1, 2].map((index) => (
-            <View key={index}>
-              <Photo
-                uri={img("curryBread", 200)}
-                width={76}
-                height={76}
-                radius={10}
-                tint={categoryTint(index)}
-              />
-              {index === 0 ? (
-                <View className="absolute bottom-1 left-1 rounded-[4px] bg-brand-600 px-1.5 py-0.5">
-                  <Txt size="micro" weight="bold" tone="white">
-                    Cover
-                  </Txt>
-                </View>
-              ) : (
-                <View className="absolute -right-1.5 -top-1.5 h-5 w-5 items-center justify-center rounded-full bg-brand-600">
-                  <Ionicons name="close" size={12} color="#ffffff" />
-                </View>
-              )}
+        <View className="flex-row gap-2.5 pt-3">
+          {imageUri ? (
+            <View>
+              <Photo uri={imageUri} width={76} height={76} radius={10} />
+              <View className="absolute bottom-1 left-1 rounded-[4px] bg-brand-600 px-1.5 py-0.5">
+                <Txt size="micro" weight="bold" tone="white">
+                  Cover
+                </Txt>
+              </View>
+              <Pressable
+                onPress={() => setImageUri(null)}
+                hitSlop={8}
+                accessibilityLabel="Remove photo"
+                className="absolute -right-1.5 -top-1.5 h-5 w-5 items-center justify-center rounded-full bg-brand-600"
+              >
+                <Ionicons name="close" size={12} color="#ffffff" />
+              </Pressable>
             </View>
-          ))}
-          <UploadTile />
-        </ScrollView>
+          ) : null}
+          <UploadTile
+            label={uploading ? "Uploading…" : imageUri ? "Change" : "Add Image"}
+            onPress={choosePhoto}
+          />
+        </View>
+        {imageError && (
+          <Txt size="tiny" tone="bad" className="mt-2">
+            {imageError}
+          </Txt>
+        )}
       </Card>
 
       <Card className="flex-row items-center gap-3 p-4">
@@ -1314,6 +1341,8 @@ function ItemForm({ existing }: { existing?: MenuItem }) {
   const [prepMinutes, setPrepMinutes] = React.useState(String(existing?.prepMinutes ?? "20"));
   const [type, setType] = React.useState(FOOD_TO_TYPE[existing?.foodType ?? "veg"]);
   const [tags, setTags] = React.useState<string[]>([]);
+  // Only a photo chosen in this session is sent; an existing one is kept as is.
+  const [imageUri, setImageUri] = React.useState<string | null>(existing?.image ?? null);
   const [visible, setVisible] = React.useState(existing?.available ?? true);
   const [perVariant, setPerVariant] = React.useState(true);
   const [availableFrom, setAvailableFrom] = React.useState(existing?.availableFrom ?? "");
@@ -1370,6 +1399,7 @@ function ItemForm({ existing }: { existing?: MenuItem }) {
           availableFrom: mode === "always" ? "" : availableFrom,
           availableTo: mode === "always" ? "" : availableTo,
           availableDays: mode === "days" ? days : [],
+          image: imageUri && imageUri !== existing?.image ? imageUri : undefined,
           addons,
           variants,
         },
@@ -1420,6 +1450,9 @@ function ItemForm({ existing }: { existing?: MenuItem }) {
             setVisible={setVisible}
             category={category}
             setCategory={setCategory}
+            imageUri={imageUri}
+            setImageUri={setImageUri}
+            fallbackName={name}
           />
         )}
         {step === 1 && (

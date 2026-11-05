@@ -520,6 +520,24 @@ export async function uploadMenuSheet(body: FormData) {
   return sendForm("/vendor/menu/import", body, "Import failed");
 }
 
+/**
+ * Uploads one dish photo and answers with where the server put it.
+ *
+ * The form is built by the caller (file picker on a phone, a File on the web).
+ * The item itself is saved separately with this URL as its `image`.
+ */
+export async function uploadMenuImage(body: FormData): Promise<string> {
+  const payload = await sendForm("/vendor/menu/upload-image", body, "Image upload failed");
+  const url = payload?.data?.imageUrl ?? payload?.imageUrl;
+  if (!url) throw new ApiError("The server did not return the uploaded image.", 0);
+  return url as string;
+}
+
+/** Replaces the restaurant's logo / profile photo. */
+export async function uploadRestaurantPhoto(body: FormData) {
+  return sendForm("/vendor/restaurant/logo", body, "Photo upload failed");
+}
+
 /** Uploads one KYC document. */
 export async function uploadKycDocument(body: FormData) {
   const payload = await sendForm("/vendor/kyc/upload", body, "Upload failed");

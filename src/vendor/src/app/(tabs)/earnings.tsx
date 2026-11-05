@@ -55,6 +55,24 @@ const statementRange = (key: PeriodKey) => {
   return { from: indiaDate(since), to: indiaDate(now) };
 };
 
+/**
+ * Opens the earnings & payout statement PDF for a period. The server hands back
+ * a link that works for ten minutes, which the phone's own PDF viewer opens -
+ * the same way a customer opens an invoice.
+ */
+async function openStatementFor(period: PeriodKey) {
+  try {
+    const { from, to } = statementRange(period);
+    const link = await api.get<{ url: string }>(`/vendor/statement-link?from=${from}&to=${to}`);
+    await Linking.openURL(link.url);
+  } catch (error) {
+    Alert.alert(
+      "Couldn't open the statement",
+      error instanceof Error ? error.message : "Please try again."
+    );
+  }
+}
+
 type Tab = "transactions" | "history" | "requests";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -76,7 +94,6 @@ function WalletChip({ balance }: { balance: number }) {
           {money(balance)}
         </Txt>
       </View>
-      <Ionicons name="chevron-forward" size={16} color="#ffffff" />
     </View>
   );
 }
@@ -279,25 +296,10 @@ function Ledger() {
   const [pickerOpen, setPickerOpen] = React.useState<null | "period" | "kind">(null);
   const [opening, setOpening] = React.useState(false);
 
-  /**
-   * Open the earnings & payout statement for the chosen period. The server
-   * hands back a link that works for ten minutes, which the phone's own PDF
-   * viewer opens - the same way a customer opens an invoice.
-   */
   const openStatement = async () => {
     setOpening(true);
-    try {
-      const { from, to } = statementRange(period);
-      const link = await api.get<{ url: string }>(`/vendor/statement-link?from=${from}&to=${to}`);
-      await Linking.openURL(link.url);
-    } catch (error) {
-      Alert.alert(
-        "Couldn't open the statement",
-        error instanceof Error ? error.message : "Please try again."
-      );
-    } finally {
-      setOpening(false);
-    }
+    await openStatementFor(period);
+    setOpening(false);
   };
 
   /** The types actually present, so the picker offers nothing that is absent. */
@@ -463,9 +465,6 @@ function Ledger() {
             );
           })}
 
-          <View className="items-center border-t border-line py-3">
-            <ActionLink label="View All Transactions" accent="indigo" />
-          </View>
         </>
       ) : (
         <View className="items-center gap-1 border-t border-line px-6 py-10">
@@ -509,7 +508,7 @@ export default function VendorPayments() {
         <Panel
           title="Earnings Overview"
           accent="indigo"
-          right={<SelectButton label="This Week" className="w-[116px]" />}
+          right={<Badge label="This Week" tone="info" />}
           className="mx-4 mt-3"
         >
           <View className="px-4 pb-4">
@@ -520,7 +519,11 @@ export default function VendorPayments() {
               <AreaChart data={payments.weekSeries} />
             </View>
             <View className="mt-3 items-center">
-              <ActionLink label="View Full Report" accent="indigo" />
+              <ActionLink
+                label="View Full Report"
+                accent="indigo"
+                onPress={() => void openStatementFor("7d")}
+              />
             </View>
           </View>
         </Panel>
@@ -532,6 +535,15 @@ export default function VendorPayments() {
           title="Grow Your Earnings!"
           detail="Keep your menu updated and get more orders."
           action="Tips"
+          onAction={() =>
+            Alert.alert("Ways to earn more", [
+              "Keep every dish's availability up to date.",
+              "Accept orders quickly - slow acceptance loses customers.",
+              "Add photos and descriptions to your best sellers.",
+              "Run an offer on quiet days.",
+            ].join(" ")
+            )
+          }
           accent="indigo"
           icon="trending-up"
           className="mx-4 mt-3"

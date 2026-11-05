@@ -92,6 +92,8 @@ export interface PlacedOrder {
   /** Decided by the server, so the app and the API cannot disagree. */
   canCancel?: boolean;
   canRequestRefund?: boolean;
+  /** Who is cooking it and where, as the order itself recorded it. */
+  restaurantInfo?: { name: string; address: string; phone: string };
   placedAt: string;
   etaAt: string;
   deliveredAt?: string;
@@ -397,6 +399,8 @@ interface StoreValue {
   toggleFavourite: (restaurantId: string) => void;
 
   orders: PlacedOrder[];
+  /** Cancels an order the kitchen has not accepted yet; throws with the server's reason if it cannot. */
+  cancelOrder: (orderId: string, reason: string) => Promise<void>;
   /**
    * True only once we know: the history has been read and it is empty.
    *
@@ -499,6 +503,21 @@ function lineKey(dishId: string, portionName?: string, extras: CartLine["extras"
  * to the customer ("#RTo1") was not the one the restaurant, the rider and the
  * admin console were all using for the same order ("AAA-119").
  */
+function restaurantInfoFrom(raw: ApiOrder): PlacedOrder["restaurantInfo"] {
+  const r = raw.restaurantId;
+  if (!r || typeof r === "string") return undefined;
+  const a = r.address;
+  const address =
+    typeof a === "string"
+      ? a
+      : a
+        ? [a.street ?? a.address, a.landmark, a.city, a.state, a.zipCode ?? a.pincode]
+            .filter(Boolean)
+            .join(", ")
+        : "";
+  return { name: r.name ?? "", address, phone: r.phone ?? "" };
+}
+
 function toPlacedOrder(raw: ApiOrder): PlacedOrder {
   const restaurantId =
     typeof raw.restaurantId === "string"
@@ -535,6 +554,7 @@ function toPlacedOrder(raw: ApiOrder): PlacedOrder {
     status: raw.status ?? "Waiting for Confirmation",
     canCancel: raw.canCancel,
     canRequestRefund: raw.canRequestRefund,
+    restaurantInfo: restaurantInfoFrom(raw),
     placedAt,
     etaAt: new Date(new Date(placedAt).getTime() + etaMinutes * 60_000).toISOString(),
     totals: totalsFromApiOrder(raw, itemTotal),
@@ -1726,10 +1746,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               // The tracking screen has heard something newer than this
               // answer was asked about; taking it would wind the status back.
               if ((statusSyncedAt.current.get(o.id) ?? 0) > askedAt) return o;
+              const info = o.restaurantInfo?.name ? o.restaurantInfo : restaurantInfoFrom(row);
               if (
                 row.status === o.status &&
                 row.canCancel === o.canCancel &&
-                row.canRequestRefund === o.canRequestRefund
+                row.canRequestRefund === o.canRequestRefund &&
+                info === o.restaurantInfo
               ) {
                 return o;
               }
@@ -1739,6 +1761,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 status: row.status,
                 canCancel: row.canCancel,
                 canRequestRefund: row.canRequestRefund,
+                restaurantInfo: info,
               };
             });
             return changed ? next : current;
@@ -1762,6 +1785,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       clearInterval(timer);
     };
   }, [token, hasLiveOrder]);
+
+  const cancelOrder = useCallback<StoreValue["cancelOrder"]>(async (orderId, reason) => {
+    await api.cancelOrder(orderId, reason);
+    // The server accepted it; show the result now rather than at the next poll.
+    statusSyncedAt.current.set(orderId, Date.now());
+    setOrders((current) =>
+      current.map((o) =>
+        o.id === orderId
+          ? { ...o, status: "Cancelled", canCancel: false, canRequestRefund: undefined }
+          : o
+      )
+    );
+  }, []);
 
   /** Accept a deferred order once its payment has gone through. */
   const commitPlacedOrder = useCallback<StoreValue["commitPlacedOrder"]>((order) => {
@@ -1800,6 +1836,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       favourites,
       toggleFavourite,
       orders,
+      cancelOrder,
       placeOrder,
       commitPlacedOrder,
       syncOrderStatus,
@@ -1888,6 +1925,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       favourites,
       toggleFavourite,
       orders,
+      cancelOrder,
       placeOrder,
       commitPlacedOrder,
       syncOrderStatus,

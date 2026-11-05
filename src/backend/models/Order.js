@@ -390,8 +390,11 @@ const orderSchema = new mongoose.Schema({
     code: { type: String, select: false },
     verifiedAt: Date,
     verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    /** How the rider proved it: 'otp' when typed, 'qr' when scanned. */
-    method: { type: String, enum: ['otp', 'qr'], default: undefined },
+    /**
+     * How the handover was recorded: 'otp' when the rider typed the code, 'qr'
+     * when they scanned it, 'vendor' when the restaurant marked Pickup Done.
+     */
+    method: { type: String, enum: ['otp', 'qr', 'vendor'], default: undefined },
     attempts: { type: Number, default: 0 },
   },
   deliveryVerification: {

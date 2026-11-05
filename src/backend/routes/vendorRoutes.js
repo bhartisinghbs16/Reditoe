@@ -66,7 +66,7 @@ import {
   getMyApplication,
   resubmitApplication,
 } from '../controllers/vendor/applicationController.js';
-import { getVendorPickupCode } from '../controllers/handoverController.js';
+import { getVendorPickupCode, markPickupDone } from '../controllers/handoverController.js';
 import deliveryBoysRoutes from './vendor/deliveryBoysRoutes.js';
 import vendorCouponRoutes from './vendor/vendorCouponRoutes.js';
 import { getVendorWithdrawalSummary, createVendorWithdrawalRequest, getVendorWithdrawals, processVendorPayout } from '../controllers/vendorWithdrawalController.js';
@@ -182,6 +182,9 @@ router.get('/orders/:orderId/invoice', protect, vendorAuth, downloadOrderInvoice
 
 // GET /api/vendor/orders/:orderId/pickup-code - the code/QR the rider verifies
 router.get('/orders/:orderId/pickup-code', protect, vendorAuth, getVendorPickupCode);
+
+// POST /api/vendor/orders/:orderId/pickup-done - the restaurant records the rider took it
+router.post('/orders/:orderId/pickup-done', protect, vendorAuth, markPickupDone);
 
 // PATCH /api/vendor/orders/:orderId/status - Update order status (state machine)
 router.patch('/orders/:orderId/status', protect, vendorAuth, updateOrderStatus);

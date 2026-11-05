@@ -271,6 +271,10 @@ export interface Restaurant extends Timestamped {
   isEnabled?: boolean;
   isFeatured?: boolean;
   foodType?: string;
+  openingHours?: string;
+  foodLicenseNumber?: string;
+  upiId?: string;
+  gstInfo?: { gstNumber?: string; gstPercentage?: number; isRegistered?: boolean };
   owner?: Ref<Customer>;
   address?: {
     street?: string;

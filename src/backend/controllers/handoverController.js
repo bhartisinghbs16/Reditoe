@@ -91,6 +91,94 @@ export const getVendorPickupCode = async (req, res) => {
 };
 
 /**
+ * POST /vendor/orders/:orderId/pickup-done
+ *
+ * The restaurant records that the rider has taken the food. This replaces the
+ * vendor having to run a code-verification screen: one tap, and the order
+ * moves Ready -> OnWay for the customer, the rider and the admin console alike.
+ *
+ * Still guarded: the order must be the vendor's own, must be Ready, and must
+ * already have a delivery partner on it - an order nobody is carrying cannot
+ * be "picked up".
+ */
+export const markPickupDone = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ status: 'error', message: 'Invalid order ID' });
+    }
+
+    const order = await Order.findOne({ _id: orderId, restaurantId: req.restaurantId });
+    if (!order) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Order not found or does not belong to your restaurant',
+      });
+    }
+
+    // Tapped twice, or the rider got there first: the result is the same.
+    if (order.pickupVerification?.verifiedAt || order.status === 'OnWay') {
+      return res.status(200).json({
+        status: 'success',
+        message: 'Already picked up.',
+        data: { status: order.status, orderNumber: order.orderNumber },
+      });
+    }
+
+    if (order.status !== 'Ready') {
+      return res.status(409).json({
+        status: 'error',
+        message: `The order is '${order.status}'. It can be marked picked up only once it is Ready.`,
+      });
+    }
+
+    if (!order.riderId) {
+      return res.status(409).json({
+        status: 'error',
+        message: 'No delivery partner has accepted this order yet.',
+      });
+    }
+
+    order.pickupVerification = {
+      ...(order.pickupVerification?.toObject?.() ?? order.pickupVerification ?? {}),
+      verifiedAt: new Date(),
+      verifiedBy: req.user?._id,
+      method: 'vendor',
+    };
+    order.status = 'OnWay';
+    order.timeline.push({
+      status: 'OnWay',
+      timestamp: new Date(),
+      message: 'Restaurant confirmed pickup - order is out for delivery',
+    });
+    await order.save({ validateBeforeSave: false });
+
+    try {
+      const restaurant = await Restaurant.findById(order.restaurantId).select('name address');
+      websocketService.emitOrderLifecycle({
+        order,
+        eventName: 'order_picked_up',
+        source: 'vendor',
+        userId: order.userId ? String(order.userId) : null,
+        vendorId: req.user?._id ? String(req.user._id) : null,
+        riderId: String(order.riderId),
+        restaurant,
+      });
+    } catch (err) {
+      console.error('[PickupDoneBroadcastError]', err?.message || err);
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Pickup recorded',
+      data: { status: order.status, orderNumber: order.orderNumber },
+    });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
+/**
  * The code the customer shows the rider on arrival. Served to the customer who
  * owns the order and to nobody else.
  */
