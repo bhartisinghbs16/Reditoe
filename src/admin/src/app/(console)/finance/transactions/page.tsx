@@ -13,22 +13,44 @@ import { Button } from "@/components/ui/button";
 import { ExportButton } from "@/components/common/export-button";
 import { useTransactions } from "@/lib/queries";
 import { useListState } from "@/lib/use-list-state";
-import { PAYMENT_METHOD_OPTIONS, PAYMENT_STATUS_OPTIONS } from "@/lib/domain";
 import { currency, dateTime, number as formatNumber, titleCase } from "@/lib/format";
 import { refDoc, refId } from "@/lib/types";
 import type { Customer, Order, Transaction } from "@/lib/types";
 
 const TYPE_OPTIONS = [
-  { value: "payment", label: "Payment" },
+  { value: "order_payment", label: "Order payment" },
   { value: "refund", label: "Refund" },
-  { value: "payout", label: "Payout" },
+  { value: "settlement", label: "Settlement" },
+  { value: "commission", label: "Commission" },
+  { value: "fee", label: "Fee" },
+  { value: "adjustment", label: "Adjustment" },
+];
+
+/** The values the ledger stores, which is what its filters match on. */
+const STATUS_OPTIONS = [
+  { value: "completed", label: "Completed" },
+  { value: "pending", label: "Pending" },
+  { value: "failed", label: "Failed" },
+  { value: "reversed", label: "Reversed" },
+];
+
+const METHOD_OPTIONS = [
+  { value: "online", label: "Online" },
+  { value: "cash", label: "Cash on delivery" },
+  { value: "card", label: "Card" },
   { value: "wallet", label: "Wallet" },
+  { value: "bank", label: "Bank" },
 ];
 
 /** Refunds and payouts move money out; everything else moves it in. */
 function isOutflow(type?: string) {
   const value = (type ?? "").toLowerCase();
-  return value.includes("refund") || value.includes("payout") || value.includes("debit");
+  return (
+    value.includes("refund") ||
+    value.includes("payout") ||
+    value.includes("settlement") ||
+    value.includes("debit")
+  );
 }
 
 export default function TransactionsPage() {
@@ -206,14 +228,14 @@ export default function TransactionsPage() {
           <FilterSelect
             value={list.filters.status ?? ""}
             onChange={(value) => list.setFilter("status", value)}
-            options={PAYMENT_STATUS_OPTIONS}
+            options={STATUS_OPTIONS}
             placeholder="All statuses"
             allLabel="All statuses"
           />
           <FilterSelect
             value={list.filters.method ?? ""}
             onChange={(value) => list.setFilter("method", value)}
-            options={PAYMENT_METHOD_OPTIONS}
+            options={METHOD_OPTIONS}
             placeholder="All methods"
             allLabel="All methods"
           />

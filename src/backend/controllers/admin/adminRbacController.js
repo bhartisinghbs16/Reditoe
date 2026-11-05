@@ -68,7 +68,15 @@ export const getOrganizationsForDropdown = async (req, res) => {
  */
 export const getRoles = async (req, res) => {
   try {
-    const roles = await Role.find({ isActive: true }).sort({ level: 1 });
+    const rows = await Role.find({ isActive: true }).sort({ level: 1 }).lean();
+
+    // How many people hold each role; the Users & roles screen shows it.
+    const held = await User.aggregate([
+      { $match: { rbacRole: { $in: rows.map((role) => role._id) } } },
+      { $group: { _id: '$rbacRole', count: { $sum: 1 } } },
+    ]);
+    const countBy = new Map(held.map((row) => [String(row._id), row.count]));
+    const roles = rows.map((role) => ({ ...role, userCount: countBy.get(String(role._id)) ?? 0 }));
     
     res.status(200).json({
       status: 'success',
@@ -136,9 +144,16 @@ export const updateRole = async (req, res) => {
     const { id } = req.params;
     const { displayName, description, permissions, isActive } = req.body;
 
+    // Only what was sent: saving permissions alone must not blank the name.
+    const changes = Object.fromEntries(
+      Object.entries({ displayName, description, permissions, isActive }).filter(
+        ([, value]) => value !== undefined
+      )
+    );
+
     const role = await Role.findByIdAndUpdate(
       id,
-      { displayName, description, permissions, isActive },
+      changes,
       { new: true, runValidators: true }
     );
 
@@ -216,7 +231,7 @@ export const getAdminUsers = async (req, res) => {
     let filter = { 
       $or: [
         { role: 'admin' },
-        { role: { $exists: true, $ne: null } }
+        { rbacRole: { $exists: true, $ne: null } }
       ]
     };
 
@@ -351,8 +366,14 @@ export const updateAdminUser = async (req, res) => {
       role: 'admin',
       rbacRole: roleId,
       organizationId,
-      isBlocked: !isActive
+      isBlocked: isActive === undefined ? undefined : !isActive
     };
+
+    // A field the caller did not send is left alone, not set to nothing;
+    // `isBlocked: !undefined` would otherwise block the account.
+    for (const key of Object.keys(updateData)) {
+      if (updateData[key] === undefined) delete updateData[key];
+    }
 
     const user = await User.findByIdAndUpdate(
       id,

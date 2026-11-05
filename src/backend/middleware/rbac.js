@@ -108,6 +108,36 @@ export const requirePermission = (permission) => {
 };
 
 /**
+ * Passes when the caller holds any one of the permissions, or `manage` on the
+ * resource of any of them.
+ *
+ * The finance routes asked for `invoices:read`, but a role can only be granted
+ * the resources in Role.js and `invoices` is not one of them, so no scoped
+ * admin could ever open Invoices. Finance is granted as `financial`; the route
+ * now names both and a role holding either gets in.
+ * Usage: router.get('/', requireAnyPermission('invoices:read', 'financial:read'), handler)
+ */
+export const requireAnyPermission = (...permissions) => {
+  return (req, res, next) => {
+    const held = req.userPermissions || [];
+    if (held.includes('*')) return next();
+
+    const allowed = permissions.some(
+      (permission) =>
+        held.includes(permission) ||
+        held.includes(`${permission.split(':')[0]}:manage`)
+    );
+    if (!allowed) {
+      return res.status(403).json({
+        status: 'error',
+        message: `Access denied. Required permission: ${permissions.join(' or ')}`,
+      });
+    }
+    next();
+  };
+};
+
+/**
  * Role-based access control middleware
  * Usage: router.get('/users', rbacProtect, requireRole(['super_admin', 'finance_admin']))
  */

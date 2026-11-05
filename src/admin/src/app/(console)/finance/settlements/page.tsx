@@ -18,10 +18,14 @@ import type { Payout, Restaurant } from "@/lib/types";
 
 const STATUS_OPTIONS = [
   { value: "pending", label: "Pending" },
+  { value: "approved", label: "Approved" },
   { value: "processing", label: "Processing" },
-  { value: "settled", label: "Settled" },
+  { value: "paid", label: "Settled" },
   { value: "failed", label: "Failed" },
 ];
+
+/** The API stores a paid-out settlement as "paid". */
+const isSettled = (status?: string) => ["paid", "settled"].includes((status ?? "").toLowerCase());
 
 export default function SettlementsPage() {
   const list = useListState({ status: "" });
@@ -131,7 +135,7 @@ export default function SettlementsPage() {
           />
           <StatCard
             label="Settled (page)"
-            value={sumBy((item) => (item.status ?? "").toLowerCase() === "settled")}
+            value={sumBy((item) => isSettled(item.status))}
             icon={CircleCheck}
             tone="emerald"
             loading={settlements.isPending}

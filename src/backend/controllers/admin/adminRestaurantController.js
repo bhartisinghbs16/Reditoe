@@ -3,6 +3,7 @@
  * Does NOT modify existing restaurantController or restaurantRoutes.
  */
 import Restaurant from '../../models/Restaurant.js';
+import Order from '../../models/Order.js';
 import FoodItem from '../../models/FoodItem.js';
 import User from '../../models/User.js';
 import mongoose from 'mongoose';
@@ -57,14 +58,31 @@ export const getRestaurants = async (req, res) => {
       Restaurant.countDocuments(filter),
     ]);
 
+    /*
+     * What each restaurant has sold. Commission & Fees multiplies revenue by
+     * the restaurant's rate, and the list carried neither figure, so every
+     * row showed zero revenue and zero commission. Food revenue is the
+     * subtotal of delivered orders - the base commission is charged on.
+     */
+    const sold = await Order.aggregate([
+      { $match: { restaurantId: { $in: restaurants.map((r) => r._id) }, status: 'Delivered' } },
+      { $group: { _id: '$restaurantId', totalOrders: { $sum: 1 }, totalRevenue: { $sum: { $ifNull: ['$subtotal', 0] } } } },
+    ]);
+    const soldBy = new Map(sold.map((row) => [String(row._id), row]));
+    const withTotals = restaurants.map((restaurant) => ({
+      ...restaurant,
+      totalOrders: soldBy.get(String(restaurant._id))?.totalOrders ?? 0,
+      totalRevenue: soldBy.get(String(restaurant._id))?.totalRevenue ?? 0,
+    }));
+
     res.status(200).json({
       status: 'success',
-      results: restaurants.length,
+      results: withTotals.length,
       total,
       page,
       totalPages: Math.ceil(total / limit),
       data: {
-        restaurants,
+        restaurants: withTotals,
       },
     });
   } catch (error) {
@@ -797,24 +815,6 @@ export const updateRestaurant = async (req, res) => {
     // Remove sensitive fields that shouldn't be updated via this endpoint
     const { _id, owner, createdAt, updatedAt, ...allowedUpdates } = updateData;
 
-    const restaurant = await Restaurant.findByIdAndUpdate(
-      id,
-      allowedUpdates,
-      { new: true, runValidators: true }
-    ).populate('owner', 'name email phone');
-
-    if (!restaurant) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Restaurant not found',
-      });
-    }
-
-    res.status(200).json({
-      status: 'success',
-      message: 'Restaurant updated successfully',
-      data: {
-        restaurant,
     // Checked here so a bad value comes back as a plain 400 the form can show,
     // instead of a validation error from deep in the save.
     if (allowedUpdates.name !== undefined && !String(allowedUpdates.name).trim()) {
@@ -839,6 +839,24 @@ export const updateRestaurant = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Restaurant type must be veg, non-veg or both.' });
     }
 
+    const restaurant = await Restaurant.findByIdAndUpdate(
+      id,
+      allowedUpdates,
+      { new: true, runValidators: true }
+    ).populate('owner', 'name email phone');
+
+    if (!restaurant) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Restaurant not found',
+      });
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Restaurant updated successfully',
+      data: {
+        restaurant,
       },
     });
   } catch (error) {

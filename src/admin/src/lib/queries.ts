@@ -29,6 +29,7 @@ import type {
   RevenueTrend,
   Rider,
   Role,
+  AdminUser,
   SupportTicket,
   Taxonomy,
   Transaction,
@@ -135,6 +136,27 @@ export function useCreateRole() {
   return useInvalidating<Record<string, unknown>, unknown>(
     (body) => api.post("/admin/rbac/roles", body),
     ["roles"]
+  );
+}
+
+export function useUpdateRole() {
+  return useInvalidating<{ id: string } & Record<string, unknown>, unknown>(
+    ({ id, ...body }) => api.put(`/admin/rbac/roles/${id}`, body),
+    ["roles", "admin-users"]
+  );
+}
+
+export function useCreateAdminUser() {
+  return useInvalidating<Record<string, unknown>, unknown>(
+    (body) => api.post("/admin/rbac/users", body),
+    ["admin-users", "roles"]
+  );
+}
+
+export function useUpdateAdminUser() {
+  return useInvalidating<{ id: string } & Record<string, unknown>, unknown>(
+    ({ id, ...body }) => api.put(`/admin/rbac/users/${id}`, body),
+    ["admin-users", "roles"]
   );
 }
 
@@ -341,6 +363,7 @@ export function useRefundTotals(params: Record<string, unknown>) {
   });
 }
 export const useRoles = listHook<Role>("/admin/rbac/roles", "roles", "roles");
+export const useAdminUsers = listHook<AdminUser>("/admin/rbac/users", "users", "admin-users");
 export const useActivityLogs = listHook<ActivityLog>(
   "/activity-logs",
   "logs",

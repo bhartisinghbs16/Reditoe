@@ -563,11 +563,22 @@ export interface Role extends Timestamped {
   /** What the team is called in the console, e.g. "Refund team". */
   displayName?: string;
   description?: string;
-  permissions?: string[];
+  /** What the role may do, grouped by resource: { resource: "financial", actions: ["read"] }. */
+  permissions?: { resource: string; actions: string[] }[];
   isSystem?: boolean;
   userCount?: number;
   /** Lower numbers outrank higher ones. */
   level?: number;
+}
+
+/** A person who can sign in to this console, with the role they hold. */
+export interface AdminUser extends Timestamped {
+  _id: string;
+  name?: string;
+  email?: string;
+  role?: string;
+  rbacRole?: Role | null;
+  isBlocked?: boolean;
 }
 
 export interface ActivityLog extends Timestamped {

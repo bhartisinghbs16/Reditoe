@@ -12,6 +12,22 @@ import User from '../../models/User.js';
 
 const DEFAULT_LIMIT = 25;
 
+/*
+ * The console's filters speak in its own words - Paid, UPI, COD, payment,
+ * payout - and the ledger stores completed, online, cash, order_payment,
+ * settlement. Matching them literally returned nothing for every filter but
+ * "pending", so each is translated here. A value that is already the stored
+ * one passes through unchanged.
+ */
+const STATUS_ALIASES = { paid: 'completed', refunded: 'reversed' };
+const METHOD_ALIASES = { upi: 'online', cod: 'cash' };
+const TYPE_ALIASES = { payment: 'order_payment', payout: 'settlement', wallet: 'adjustment' };
+
+const alias = (table, value) => {
+  const key = String(value).trim().toLowerCase();
+  return table[key] ?? key;
+};
+
 /**
  * Maps a stored transaction onto the shape the console reads. `paymentMethod`
  * is renamed to `method`, and a refund is reported as its own type rather than
@@ -31,7 +47,7 @@ function mapTransaction(row) {
     status: row.status,
     method: row.paymentMethod,
     orderId: row.orderId,
-    userId: row.userId ?? null,
+    userId: row.userId ?? row.orderId?.userId ?? null,
     restaurantId: row.restaurantId,
     commissionAmount: row.commissionAmount,
     vendorAmount: row.vendorAmount,
@@ -66,9 +82,19 @@ export const getTransactions = async (req, res) => {
     const limitNumber = Math.max(1, Number(limit) || DEFAULT_LIMIT);
 
     const query = {};
-    if (status) query.status = status;
-    if (type) query.type = type;
-    if (paymentMethod) query.paymentMethod = paymentMethod;
+    if (status) {
+      const wanted = alias(STATUS_ALIASES, status);
+      // A refund is recorded as its own flag, not as a status of its own.
+      if (String(status).toLowerCase() === 'refunded') query['refundInfo.isRefund'] = true;
+      else query.status = wanted;
+    }
+    if (type) {
+      if (String(type).toLowerCase() === 'refund') query['refundInfo.isRefund'] = true;
+      else query.type = alias(TYPE_ALIASES, type);
+    }
+    // The console's own filter is called `method`; `paymentMethod` is the stored name.
+    const methodFilter = paymentMethod || req.query.method;
+    if (methodFilter) query.paymentMethod = alias(METHOD_ALIASES, methodFilter);
     if (restaurantId) query.restaurantId = restaurantId;
 
     if (from || to) {
@@ -87,7 +113,7 @@ export const getTransactions = async (req, res) => {
 
     const total = await FinancialTransaction.countDocuments(query);
     const rows = await FinancialTransaction.find(query)
-      .populate('orderId', 'orderNumber total status')
+      .populate({ path: 'orderId', select: 'orderNumber total status userId', populate: { path: 'userId', select: 'name phone' } })
       .populate('restaurantId', 'name')
       .sort({ createdAt: -1 })
       .skip((pageNumber - 1) * limitNumber)

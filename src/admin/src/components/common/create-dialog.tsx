@@ -37,7 +37,15 @@ import {
 export type FieldSpec = {
   name: string;
   label: string;
-  type?: "text" | "textarea" | "number" | "date" | "datetime-local" | "select";
+  type?:
+    | "text"
+    | "email"
+    | "password"
+    | "textarea"
+    | "number"
+    | "date"
+    | "datetime-local"
+    | "select";
   placeholder?: string;
   required?: boolean;
   options?: { value: string; label: string }[];

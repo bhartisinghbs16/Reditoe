@@ -19,15 +19,20 @@ import type { Invoice, Order, Restaurant } from "@/lib/types";
 
 const STATUS_OPTIONS = [
   { value: "paid", label: "Paid" },
-  { value: "unpaid", label: "Unpaid" },
-  { value: "overdue", label: "Overdue" },
-  { value: "draft", label: "Draft" },
+  { value: "pending", label: "Pending" },
+  { value: "generated", label: "Generated" },
+  { value: "refunded", label: "Refunded" },
+  { value: "cancelled", label: "Cancelled" },
 ];
 
-/** Unpaid past its due date reads as overdue even if the API hasn't caught up. */
+/**
+ * Unpaid past its due date reads as overdue even if the API hasn't caught up.
+ * The API calls an unpaid invoice "pending" or "generated".
+ */
 function invoiceStatus(invoice: Invoice) {
   const status = (invoice.status ?? "").toLowerCase();
-  if (status && status !== "unpaid") return status;
+  const unpaid = ["unpaid", "pending", "generated"];
+  if (status && !unpaid.includes(status)) return status;
   if (invoice.dueDate && new Date(invoice.dueDate).getTime() < Date.now())
     return "overdue";
   return status || "unpaid";

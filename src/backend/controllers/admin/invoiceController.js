@@ -183,13 +183,35 @@ export const getInvoices = async (req, res) => {
     sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
     
     // Execute query with pagination
-    const invoices = await Invoice.find(query)
+    const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+    const limitNumber = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    const rows = await Invoice.find(query)
       .populate('customerId', 'name email phone')
       .populate('vendorId', 'name phone email')
-      .populate('orderId', 'status paymentMethod orderNumber')
+      .populate({
+        path: 'orderId',
+        select: 'status paymentMethod orderNumber restaurantId',
+        populate: { path: 'restaurantId', select: 'name image address' },
+      })
       .sort(sort)
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .limit(limitNumber)
+      .skip((pageNumber - 1) * limitNumber)
+      .lean();
+
+    /*
+     * The console reads `totalAmount`, `issuedDate` and `restaurantId`; the
+     * invoice stores `grandTotal`, `issueDate` and reaches the restaurant
+     * only through its order. Without these the list showed every amount as
+     * zero, every date blank and every restaurant as a dash.
+     */
+    const invoices = rows.map((invoice) => ({
+      ...invoice,
+      totalAmount: invoice.grandTotal,
+      amount: invoice.grandTotal,
+      issuedDate: invoice.issueDate,
+      restaurantId: invoice.orderId?.restaurantId ?? null,
+    }));
     
     // Get total count for pagination
     const total = await Invoice.countDocuments(query);
@@ -217,11 +239,15 @@ export const getInvoices = async (req, res) => {
     
     res.status(200).json({
       success: true,
+      status: 'success',
+      total,
+      page: pageNumber,
+      totalPages: Math.max(1, Math.ceil(total / limitNumber)),
       data: {
         invoices,
         pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(total / limit),
+          current: pageNumber,
+          pages: Math.ceil(total / limitNumber),
           total
         },
         summary: summary[0] || {

@@ -18,10 +18,12 @@ import type { Payout, Restaurant, Rider } from "@/lib/types";
 
 const STATUS_OPTIONS = [
   { value: "pending", label: "Pending" },
-  { value: "processing", label: "Processing" },
-  { value: "paid", label: "Paid" },
+  { value: "completed", label: "Paid" },
   { value: "failed", label: "Failed" },
 ];
+
+/** The API stores a released payout as "completed"; older rows may say "paid". */
+const isPaid = (status?: string) => ["completed", "paid"].includes((status ?? "").toLowerCase());
 
 export default function PayoutsPage() {
   const list = useListState({ status: "" });
@@ -151,7 +153,7 @@ export default function PayoutsPage() {
           />
           <StatCard
             label="Paid (page)"
-            value={sumBy((payout) => (payout.status ?? "").toLowerCase() === "paid")}
+            value={sumBy((payout) => isPaid(payout.status))}
             icon={CircleCheck}
             tone="emerald"
             loading={payouts.isPending}

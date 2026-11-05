@@ -22,14 +22,25 @@ export const getPayouts = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const skip = (page - 1) * limit;
-    const status = req.query.status; // optional: pending | completed | failed
+    // optional: pending | completed | failed ("paid" is the console's word for completed)
+    const status = req.query.status === 'paid' ? 'completed' : req.query.status;
+    const search = String(req.query.search || '').trim();
 
     const filter = {};
     if (status && ['pending', 'completed', 'failed'].includes(status)) {
       filter.status = status;
     }
+    if (search) {
+      const restaurants = await Restaurant.find({ name: { $regex: search, $options: 'i' } })
+        .select('_id')
+        .lean();
+      filter.$or = [
+        { transactionId: { $regex: search, $options: 'i' } },
+        { restaurantId: { $in: restaurants.map((r) => r._id) } },
+      ];
+    }
 
-    const [payouts, total] = await Promise.all([
+    const [rows, total] = await Promise.all([
       Payout.find(filter)
         .populate('restaurantId', 'name image address')
         .sort({ createdAt: -1 })
@@ -38,6 +49,18 @@ export const getPayouts = async (req, res) => {
         .lean(),
       Payout.countDocuments(filter),
     ]);
+
+    /*
+     * The console reads amount / reference / method; the document stores
+     * grossAmount / transactionId / payoutMethod. Without the aliases the
+     * list showed no reference, no method and no gross figure.
+     */
+    const payouts = rows.map((row) => ({
+      ...row,
+      amount: row.grossAmount,
+      reference: row.transactionId || undefined,
+      method: row.payoutMethod,
+    }));
 
     res.status(200).json({
       status: 'success',

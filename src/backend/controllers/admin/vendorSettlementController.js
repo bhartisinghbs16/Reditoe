@@ -18,21 +18,30 @@ export const getSettlements = async (req, res) => {
       restaurantId,
       startDate,
       endDate,
+      search,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
 
     const filter = {};
     
-    if (status && status !== 'all') filter.status = status;
+    // The console's filter says "settled"; the document says "paid".
+    if (status && status !== 'all') filter.status = status === 'settled' ? 'paid' : status;
+    if (search) {
+      const term = String(search).trim();
+      const restaurants = await Restaurant.find({ name: { $regex: term, $options: 'i' } }).select('_id').lean();
+      filter.$or = [
+        { settlementNumber: { $regex: term, $options: 'i' } },
+        { restaurantId: { $in: restaurants.map((r) => r._id) } },
+      ];
+    }
     if (vendorId) filter.vendorId = vendorId;
     if (restaurantId) filter.restaurantId = restaurantId;
 
     // Date range filter
     if (startDate || endDate) {
-      filter['settlementPeriod.startDate'] = {};
-      if (startDate) filter['settlementPeriod.startDate'].$gte = new Date(startDate);
-      if (endDate) filter['settlementPeriod.endDate'].$lte = new Date(endDate);
+      if (startDate) filter['settlementPeriod.startDate'] = { $gte: new Date(startDate) };
+      if (endDate) filter['settlementPeriod.endDate'] = { $lte: new Date(endDate) };
     }
 
     const sortOptions = {};
@@ -40,19 +49,39 @@ export const getSettlements = async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const settlements = await VendorSettlement.find(filter)
+    const rows = await VendorSettlement.find(filter)
+      .select('-items')
       .populate('vendorId', 'name email phone')
-      .populate('restaurantId', 'name')
+      .populate('restaurantId', 'name image address')
       .populate('approvalInfo.approvedBy', 'name email')
       .populate('processingInfo.processedBy', 'name email')
       .sort(sortOptions)
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .lean();
+
+    /*
+     * The console reads periodStart / periodEnd / amount / netAmount /
+     * reference. The document nests them under settlementPeriod and summary,
+     * so the list showed no dates and every amount as zero.
+     */
+    const settlements = rows.map((row) => ({
+      ...row,
+      periodStart: row.settlementPeriod?.startDate,
+      periodEnd: row.settlementPeriod?.endDate,
+      amount: row.summary?.grossRevenue ?? 0,
+      netAmount: row.summary?.finalAmount ?? 0,
+      reference: row.settlementNumber,
+    }));
 
     const total = await VendorSettlement.countDocuments(filter);
 
     res.json({
       success: true,
+      status: 'success',
+      total,
+      page: parseInt(page),
+      totalPages: Math.max(1, Math.ceil(total / parseInt(limit))),
       data: {
         settlements,
         pagination: {
