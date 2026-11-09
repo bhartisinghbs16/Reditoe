@@ -60,6 +60,7 @@ export function Txt({
   className = "",
   numberOfLines,
   style,
+  selectable,
 }: {
   children: React.ReactNode;
   size?: "micro" | "tiny" | "sm" | "base" | "lg" | "xl" | "2xl" | "3xl";
@@ -67,6 +68,7 @@ export function Txt({
   tone?: TextTone;
   className?: string;
   numberOfLines?: number;
+  selectable?: boolean;
   /** For one-off colours that come from data (accent tints), not tokens. */
   style?: StyleProp<TextStyle>;
 }) {
@@ -91,6 +93,7 @@ export function Txt({
   return (
     <Text
       numberOfLines={numberOfLines}
+      selectable={selectable}
       style={style}
       className={`${sizes} ${weights} ${textTones[tone]} ${className}`}
     >

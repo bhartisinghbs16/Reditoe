@@ -99,7 +99,7 @@ export function PlusShare() {
         </Txt>
       </View>
       <Pressable
-        onPress={shareReferral}
+        onPress={() => void shareReferral()}
         accessibilityLabel="Invite friends to Reditoe"
         className="flex-row items-center gap-1 rounded-tile border border-plus-500 px-3 py-2.5 active:opacity-70"
       >

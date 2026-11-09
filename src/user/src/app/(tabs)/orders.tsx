@@ -239,7 +239,7 @@ export default function OrdersScreen() {
       title: "Invite Friends",
       detail: "Earn Reditoe Money",
       accent: "pink" as const,
-      onPress: shareReferral,
+      onPress: () => void shareReferral(),
     },
   ];
 

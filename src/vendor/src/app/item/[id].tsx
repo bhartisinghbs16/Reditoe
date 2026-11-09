@@ -143,6 +143,7 @@ function Counters({ item }: { item: MenuItem }) {
 
 function BasicInfo({ item }: { item: MenuItem }) {
   const { toggleAvailability } = useStore();
+  const router = useRouter();
 
   return (
     <View className="gap-3">
@@ -196,29 +197,26 @@ function BasicInfo({ item }: { item: MenuItem }) {
           showsHorizontalScrollIndicator={false}
           contentContainerClassName="gap-2.5 pt-3"
         >
-          {[0, 1, 2].map((index) => (
-            <View key={index}>
+          {item.image ? (
+            <View>
               <Photo
                 uri={item.image}
                 width={76}
                 height={76}
                 radius={10}
-                tint={categoryTint(index)}
+                tint={categoryTint(0)}
               />
-              {index === 0 ? (
-                <View className="absolute bottom-1 left-1 rounded-[4px] bg-brand-600 px-1.5 py-0.5">
-                  <Txt size="micro" weight="bold" tone="white">
-                    Primary
-                  </Txt>
-                </View>
-              ) : (
-                <View className="absolute -right-1.5 -top-1.5 h-5 w-5 items-center justify-center rounded-full bg-brand-600">
-                  <Ionicons name="close" size={12} color="#ffffff" />
-                </View>
-              )}
+              <View className="absolute bottom-1 left-1 rounded-[4px] bg-brand-600 px-1.5 py-0.5">
+                <Txt size="micro" weight="bold" tone="white">
+                  Primary
+                </Txt>
+              </View>
             </View>
-          ))}
-          <UploadTile />
+          ) : null}
+          <UploadTile
+            label={item.image ? "Change" : "Add Image"}
+            onPress={() => router.push(`/item/new?id=${item.id}`)}
+          />
         </ScrollView>
       </Card>
 
@@ -226,7 +224,7 @@ function BasicInfo({ item }: { item: MenuItem }) {
         icon="information-circle"
         tint="blue"
         title="Item Description"
-        detail="Soft cubes cooked in a rich, creamy tomato gravy flavoured with butter, cashew paste and aromatic spices."
+        detail={item.description || "No description added yet."}
       />
 
       <NoteCard

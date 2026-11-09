@@ -86,7 +86,7 @@ export default function ReferralsScreen() {
     <SafeAreaView edges={["top"]} className="flex-1 bg-surface">
       <View className="flex-row items-center border-b border-line px-4 py-3">
         <Pressable onPress={() => router.back()} className="mr-3 h-10 w-10 items-center justify-center rounded-full bg-surface-sunken">
-          <Ionicons name="arrow-back" size={22} color={colors.ink[900]} />
+          <Ionicons name="arrow-back" size={22} color={colors.ink.default} />
         </Pressable>
         <View>
           <Txt size="xl" weight="bold">Refer &amp; Earn</Txt>

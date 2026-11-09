@@ -1212,7 +1212,7 @@ export const api = {
   },
 
   async referralStatus() {
-    const res = await request<{ data: { invites: Array<{ _id: string; targetType: string; code: string; rewardAmount: number; status: string; createdAt: string; registeredAt?: string | null; approvedAt?: string | null; rewardedAt?: string | null }>; totals: Record<string, number>; amounts: { user: number; vendor: number; delivery_partner: number } } }>(
+    const res = await request<{ data: { invites: Array<{ _id: string; targetType: string; code: string; rewardAmount: number; status: string; createdAt: string; registeredAt?: string | null; approvedAt?: string | null; rewardedAt?: string | null; link?: string }>; totals: Record<string, number>; amounts: { user: number; vendor: number; delivery_partner: number } } }>(
       "/referral/invites", { auth: true }
     );
     return res.data;
