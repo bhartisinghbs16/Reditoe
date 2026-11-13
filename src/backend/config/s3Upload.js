@@ -1,10 +1,12 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
 import multerS3 from 'multer-s3';
 import s3Client from './s3.js';
+import { uploadFileFilter, sniffUploadType } from '../utils/fileSniff.js';
 
-const limits = { fileSize: 10 * 1024 * 1024 };
+const limits = { fileSize: 10 * 1024 * 1024, files: 10 };
 const hasS3Config = Boolean(process.env.AWS_S3_BUCKET && process.env.AWS_ACCESS_KEY_ID);
 
 /**
@@ -29,7 +31,7 @@ const localBase = () =>
   (process.env.PUBLIC_UPLOAD_URL || '').replace(/\/+$/, '');
 
 function fileName(file) {
-  const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+  const unique = crypto.randomBytes(16).toString('hex');
   const parts = String(file.originalname || '').split('.');
   const extension = parts.length > 1 ? parts.pop() : 'bin';
   return `${unique}.${extension}`;
@@ -39,13 +41,41 @@ const createDiskUpload = (folder) => {
   const target = path.join(LOCAL_DIR, folder);
   fs.mkdirSync(target, { recursive: true });
 
-  return multer({
-    storage: multer.diskStorage({
-      destination: (req, file, cb) => cb(null, target),
-      filename: (req, file, cb) => cb(null, fileName(file)),
-    }),
-    limits,
+  const disk = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, target),
+    filename: (req, file, cb) => cb(null, fileName(file)),
   });
+
+  /*
+   * The extension and Content-Type are the sender's word. Once the file is
+   * on disk its first bytes are read, and anything that is not really an
+   * image or a PDF is deleted and refused.
+   */
+  const storage = {
+    _handleFile(req, file, cb) {
+      disk._handleFile(req, file, (error, info) => {
+        if (error) return cb(error);
+        try {
+          const fd = fs.openSync(info.path, 'r');
+          const head = Buffer.alloc(16);
+          fs.readSync(fd, head, 0, 16, 0);
+          fs.closeSync(fd);
+          if (!sniffUploadType(head)) {
+            fs.unlink(info.path, () => {});
+            return cb(new Error('That file is not a valid image or PDF.'));
+          }
+        } catch (sniffError) {
+          return cb(sniffError);
+        }
+        return cb(null, info);
+      });
+    },
+    _removeFile(req, file, cb) {
+      disk._removeFile(req, file, cb);
+    },
+  };
+
+  return multer({ storage, limits, fileFilter: uploadFileFilter });
 };
 
 export const uploadToS3 = (folder = 'uploads') => {
@@ -62,6 +92,7 @@ export const uploadToS3 = (folder = 'uploads') => {
         key: (req, file, cb) => cb(null, `${folder}/${fileName(file)}`),
       }),
       limits,
+      fileFilter: uploadFileFilter,
     });
   } catch (error) {
     return createDiskUpload(folder);

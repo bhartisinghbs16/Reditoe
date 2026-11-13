@@ -14,6 +14,7 @@ import { UpdatePrompt } from "@/components/update-prompt";
 import { StoreProvider } from "@/lib/store";
 import { Button, Txt } from "@/components/ui";
 import { colors } from "@/lib/theme";
+import "@/lib/background-location"; // declares the background task at startup
 import "@/global.css";
 
 SplashScreen.preventAutoHideAsync().catch(() => {});

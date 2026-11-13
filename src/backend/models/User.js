@@ -302,6 +302,10 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  // Set when the person deleted their account; personal details are cleared.
+  deletedAt: {
+    type: Date,
+  },
   // Admin profile fields
   status: {
     type: String,

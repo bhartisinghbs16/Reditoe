@@ -2,6 +2,7 @@ import React from "react";
 import { AppState } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
+import { requestLocationWithDisclosure } from "./location-permission";
 
 /**
  * Where the customer is, kept current while the app is open.
@@ -79,7 +80,7 @@ export function useHere(enabled = true) {
       const existing = await Location.getForegroundPermissionsAsync();
       if (existing.status === "granted") return true;
       if (existing.canAskAgain === false) return false;
-      const asking = await Location.requestForegroundPermissionsAsync();
+      const asking = { status: (await requestLocationWithDisclosure()) ? "granted" : "denied" };
       if (asking.status === "granted") {
         await AsyncStorage.removeItem(ASKED_KEY);
         return true;

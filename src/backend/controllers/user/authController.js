@@ -1,4 +1,5 @@
 ﻿import User from '../../models/User.js';
+import { adminPasswordProblem } from '../../utils/passwordPolicy.js';
 import {
   readIdentifier,
   identifierQuery,
@@ -1230,6 +1231,13 @@ export const resetPassword = async (req, res) => {
     const check = await consumeResetAttempt(user, otp);
     if (!check.ok) {
       return res.status(check.status).json({ status: 'error', message: check.message });
+    }
+
+    if (user.role === 'admin') {
+      const weakness = adminPasswordProblem(chosen);
+      if (weakness) {
+        return res.status(400).json({ status: 'error', message: weakness });
+      }
     }
 
     user.password = chosen;

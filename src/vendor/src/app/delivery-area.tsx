@@ -8,6 +8,7 @@ import { Button, Card, Txt, colors } from "@/components/ui";
 import { ScreenHeader } from "@/components/screen-header";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
+import { requestLocationWithDisclosure } from "@/lib/location-permission";
 
 /**
  * How far this restaurant delivers.
@@ -48,7 +49,7 @@ export default function DeliveryAreaScreen() {
   const useCurrentLocation = async () => {
     setLocating(true);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const status = (await requestLocationWithDisclosure()) ? "granted" : "denied";
       if (status !== "granted") {
         Alert.alert(
           "Location permission needed",

@@ -1,5 +1,7 @@
 import * as Location from "expo-location";
 import { api } from "@/lib/api";
+import { requestLocationWithDisclosure } from "./location-permission";
+import { startBackgroundLocation, stopBackgroundLocation } from "./background-location";
 
 /**
  * Telling the server where the rider is, while they are on duty.
@@ -46,7 +48,7 @@ export async function startDutyLocation(): Promise<boolean> {
   const granted =
     existing.status === "granted" ||
     (existing.canAskAgain &&
-      (await Location.requestForegroundPermissionsAsync()).status === "granted");
+      (await requestLocationWithDisclosure()));
   if (!granted) return false;
 
   // One straight away, so going on duty is enough to be findable — waiting
@@ -58,10 +60,13 @@ export async function startDutyLocation(): Promise<boolean> {
     { accuracy: ACCURACY, timeInterval: EVERY_MS, distanceInterval: EVERY_METRES },
     (position) => void report(position)
   );
+  // Keep going when the app is minimised (asks the rider first).
+  void startBackgroundLocation();
   return true;
 }
 
 export function stopDutyLocation() {
   subscription?.remove();
   subscription = null;
+  void stopBackgroundLocation();
 }

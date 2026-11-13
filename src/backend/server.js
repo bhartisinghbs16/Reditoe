@@ -3,6 +3,7 @@ import express from 'express';
 import http from 'http';
 import mongoose from 'mongoose';
 import cors from 'cors';
+import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import net from 'net';
 import dns from 'dns';
@@ -15,6 +16,8 @@ import websocketService from './services/websocketService.js';
 import liveTrackingService from './services/liveTrackingService.js';
 import pushNotificationService from './services/pushNotificationService.js';
 import fileUploadService from './services/fileUploadService.js';
+import { guardPrivateUploads, signPrivateUrlsInResponses, stripSignaturesFromRequests } from './utils/privateFiles.js';
+import { razorpayWebhook } from './controllers/user/razorpayWebhook.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -102,6 +105,18 @@ const buildDirectMongoUri = async (uri) => {
   return `mongodb://${auth}${hosts}/${dbName}?${params.toString()}`;
 };
 
+/*
+ * Standard security headers. The API serves JSON and a few downloadable files
+ * (invoices, uploads) that the admin console and apps load from another
+ * origin, so cross-origin resource sharing stays on; everything else is
+ * helmet's defaults.
+ */
+app.disable('x-powered-by');
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false,
+}));
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
   : [];
@@ -125,8 +140,14 @@ if (isDevelopment) {
           return callback(null, true);
         }
       } else {
-        // No allowed origins set - allow all for mobile app support
-        return callback(null, true);
+        /*
+         * Nothing configured: still open, so the live admin console and web
+         * apps keep working. Set ALLOWED_ORIGINS on the server to the exact
+         * addresses of the admin console and web apps to close this; native
+         * apps send no Origin header and are never affected. Setting
+         * ALLOW_ALL_ORIGINS=false refuses browsers when the list is empty.
+         */
+        if (process.env.ALLOW_ALL_ORIGINS !== 'false') return callback(null, true);
       }
       
       /**
@@ -167,15 +188,21 @@ if (isDevelopment) {
   if (allowedOrigins.length > 0) {
     console.log(`🔒 CORS configured: Restricted to ${allowedOrigins.length} origin(s)`);
   } else {
-    console.log('🔓 CORS configured: All origins allowed (mobile app support)');
+    console.log('🔓 CORS configured: all browser origins allowed. Set ALLOWED_ORIGINS to restrict.');
   }
 }
 
-// Raw body middleware for webhook (must be before express.json)
-app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
+/*
+ * Razorpay calls this on its own for every captured payment, so an order is
+ * placed even when the customer closed the app after paying. It needs the raw
+ * bytes for the signature, hence before express.json and ahead of any auth.
+ */
+app.post('/api/webhooks/razorpay', express.raw({ type: '*/*', limit: '1mb' }), razorpayWebhook);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(stripSignaturesFromRequests);
+app.use(signPrivateUrlsInResponses);
 
 const defaultRateLimitMax = isDevelopment ? '5000' : '500';
 const rateLimitMax = parseInt(process.env.RATE_LIMIT_MAX || defaultRateLimitMax, 10);
@@ -323,7 +350,7 @@ async function startServer() {
     res.json({ status: 'ok', message: 'Backend running', timestamp: new Date().toISOString() });
   });
 
-  app.use('/uploads', express.static(join(__dirname, 'uploads')));
+  app.use('/uploads', guardPrivateUploads, express.static(join(__dirname, 'uploads'), { dotfiles: 'deny', index: false }));
   app.use('/api', apiRoutes);
 
   // Global error handler for unhandled promise rejections

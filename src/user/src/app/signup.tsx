@@ -9,6 +9,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Linking } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
@@ -304,11 +305,21 @@ export default function SignUpScreen() {
               />
               <Txt size="sm" tone="muted" className="flex-1">
                 I agree to the{" "}
-                <Txt size="sm" weight="bold" tone="brand">
+                <Txt
+                  size="sm"
+                  weight="bold"
+                  tone="brand"
+                  onPress={() => void Linking.openURL("https://www.reditoe.com/terms.html")}
+                >
                   Terms &amp; Conditions
                 </Txt>{" "}
                 and{" "}
-                <Txt size="sm" weight="bold" tone="brand">
+                <Txt
+                  size="sm"
+                  weight="bold"
+                  tone="brand"
+                  onPress={() => void Linking.openURL("https://www.reditoe.com/privacy.html")}
+                >
                   Privacy Policy
                 </Txt>
               </Txt>

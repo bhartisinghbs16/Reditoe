@@ -10,7 +10,7 @@
  * address when running on a device.
  */
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getSecureItem, setSecureItem, removeSecureItem } from "./secure-storage";
 
 /**
  * Where the live platform runs.
@@ -96,14 +96,14 @@ let token: string | null = null;
 
 export async function loadToken() {
   if (token) return token;
-  token = await AsyncStorage.getItem(TOKEN_KEY).catch(() => null);
+  token = await getSecureItem(TOKEN_KEY).catch(() => null);
   return token;
 }
 
 export async function setToken(next: string | null) {
   token = next;
-  if (next) await AsyncStorage.setItem(TOKEN_KEY, next).catch(() => {});
-  else await AsyncStorage.removeItem(TOKEN_KEY).catch(() => {});
+  if (next) await setSecureItem(TOKEN_KEY, next).catch(() => {});
+  else await removeSecureItem(TOKEN_KEY).catch(() => {});
 }
 
 export function currentToken() {
@@ -421,6 +421,11 @@ export async function verifyOtp(phone: string, otp: string): Promise<VerifyResul
 
 export async function logout() {
   await setToken(null);
+}
+
+/** Permanently deletes this account; personal details are erased server-side. */
+export async function deleteAccount() {
+  await request("/auth/delete-account", { method: "POST", body: { confirm: "DELETE" } });
 }
 
 /** The conversation between a customer and the partner delivering an order. */

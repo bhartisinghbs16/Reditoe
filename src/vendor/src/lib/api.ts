@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getSecureItem, setSecureItem, removeSecureItem } from "./secure-storage";
 
 /**
  * The single door to the backend.
@@ -97,14 +97,14 @@ function notifyUnauthorized(message: string) {
 
 export async function loadToken() {
   if (cachedToken !== null) return cachedToken;
-  cachedToken = (await AsyncStorage.getItem(TOKEN_KEY)) ?? "";
+  cachedToken = (await getSecureItem(TOKEN_KEY)) ?? "";
   return cachedToken;
 }
 
 export async function setToken(token: string | null) {
   cachedToken = token ?? "";
-  if (token) await AsyncStorage.setItem(TOKEN_KEY, token);
-  else await AsyncStorage.removeItem(TOKEN_KEY);
+  if (token) await setSecureItem(TOKEN_KEY, token);
+  else await removeSecureItem(TOKEN_KEY);
 }
 
 /* ── Errors ─────────────────────────────────────────────────────────────── */
@@ -546,6 +546,11 @@ export async function uploadKycDocument(body: FormData) {
 
 export async function logout() {
   await setToken(null);
+}
+
+/** Permanently deletes this account; personal details are erased server-side. */
+export async function deleteAccount() {
+  await api.post("/auth/delete-account", { confirm: "DELETE" });
 }
 
 export interface RegistrationDraft {

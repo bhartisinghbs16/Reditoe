@@ -639,10 +639,6 @@ export const previewOrderPricing = async (req, res) => {
 // Create order - POST /api/orders/create
 export const createOrder = async (req, res) => {
   try {
-    // DEBUG LOGGING
-    console.log("ORDER CREATE PAYLOAD:");
-    console.log(JSON.stringify(req.body, null, 2));
-    
     const {
       restaurantId,
       items,

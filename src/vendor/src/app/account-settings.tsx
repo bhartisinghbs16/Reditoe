@@ -5,6 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Button, Card, Divider, Txt } from "@/components/ui";
 import { ScreenHeader } from "@/components/screen-header";
 import { useStore } from "@/lib/store";
+import { deleteAccount } from "@/lib/api";
 
 /**
  * The account itself: who is signed in, and how to leave.
@@ -42,6 +43,31 @@ export default function AccountSettings() {
       },
     ]);
 
+  const confirmDelete = () =>
+    Alert.alert(
+      "Delete your account?",
+      "This permanently erases your account details and switches your restaurant off. Order and payout records the law requires us to keep stay, without your personal details. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete account",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deleteAccount();
+              await signOut();
+              router.replace("/login");
+            } catch (error) {
+              Alert.alert(
+                "Could not delete account",
+                error instanceof Error ? error.message : "Please try again."
+              );
+            }
+          },
+        },
+      ]
+    );
+
   return (
     <SafeAreaView edges={["top"]} className="flex-1 bg-surface">
       <ScreenHeader title="Account Settings" />
@@ -65,6 +91,9 @@ export default function AccountSettings() {
 
         <View className="mx-4 mt-4">
           <Button label="Sign out" variant="plain" onPress={confirmSignOut} />
+        </View>
+        <View className="mx-4 mt-2">
+          <Button label="Delete account" variant="plain" onPress={confirmDelete} />
         </View>
       </ScrollView>
     </SafeAreaView>

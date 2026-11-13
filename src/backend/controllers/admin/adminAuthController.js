@@ -6,6 +6,7 @@
 import User from '../../models/User.js';
 import { signChallenge } from './adminTwoFactorController.js';
 import { signToken } from '../../utils/jwt.js';
+import { adminPasswordProblem } from '../../utils/passwordPolicy.js';
 import multer from 'multer';
 import cloudStorageService from '../../services/cloudStorageService.js';
 
@@ -236,11 +237,9 @@ export const adminChangePassword = async (req, res) => {
       });
     }
 
-    if (typeof newPassword !== 'string' || newPassword.length < 8) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'New password must be at least 8 characters long',
-      });
+    const weakness = adminPasswordProblem(newPassword);
+    if (weakness) {
+      return res.status(400).json({ status: 'error', message: weakness });
     }
 
     const userId = req.user?.id || req.user?._id;

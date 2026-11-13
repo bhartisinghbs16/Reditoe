@@ -1,5 +1,5 @@
 import React from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -23,6 +23,7 @@ import { money } from "@/lib/format";
 import type { TintName } from "@/lib/theme";
 import { useStore } from "@/lib/store";
 import { useSession } from "@/lib/session";
+import { deleteAccount } from "@/lib/api";
 
 /**
  * Profile, reproduced from the reference: the identity card, the wallet
@@ -257,6 +258,41 @@ export default function Profile() {
                 await signOut();
                 router.replace("/login");
               }}
+            />
+          </Card>
+
+          <Card>
+            <LinkRow
+              icon="trash-outline"
+              tint="red"
+              title="Delete account"
+              titleTone="bad"
+              detail="Permanently erase your account and documents"
+              onPress={() =>
+                Alert.alert(
+                  "Delete your account?",
+                  "This permanently erases your profile, bank and identity details. Delivery and payout records the law requires us to keep stay, without your personal details. This cannot be undone.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete account",
+                      style: "destructive",
+                      onPress: async () => {
+                        try {
+                          await deleteAccount();
+                          await signOut();
+                          router.replace("/login");
+                        } catch (error) {
+                          Alert.alert(
+                            "Could not delete account",
+                            error instanceof Error ? error.message : "Please try again."
+                          );
+                        }
+                      },
+                    },
+                  ]
+                )
+              }
             />
           </Card>
 

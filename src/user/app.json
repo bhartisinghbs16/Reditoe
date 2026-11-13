@@ -2,7 +2,7 @@
   "expo": {
     "name": "Reditoe",
     "slug": "reditoe-customer",
-    "version": "1.0.17",
+    "version": "1.0.18",
     "runtimeVersion": {
       "policy": "appVersion"
     },
@@ -23,7 +23,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.reditoe.app",
-      "versionCode": 25,
+      "versionCode": 26,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"

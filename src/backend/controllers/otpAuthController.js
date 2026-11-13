@@ -68,6 +68,29 @@ const sixDigits = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 const mayRevealCode = () =>
   process.env.NODE_ENV !== 'production' || process.env.ALLOW_DEBUG_OTP === 'true';
 
+/**
+ * Google Play (and App Store) reviewers cannot receive an SMS sent to a number
+ * they do not own, so one test login per app is allowed to use a fixed code.
+ *
+ * It is off unless BOTH variables are set on the server:
+ *
+ *   REVIEWER_LOGINS  role:mobile pairs, e.g. user:9000000001,vendor:9000000002,rider:9000000003
+ *   REVIEWER_OTP     the six-digit code those numbers accept
+ *
+ * Only a listed number, signing in as its own listed role, is affected. Every
+ * other number goes through the normal text-message flow with all its limits.
+ * To switch the reviewer logins off after approval, delete REVIEWER_OTP.
+ */
+const reviewerCode = (phone, role) => {
+  const code = String(process.env.REVIEWER_OTP || '').trim();
+  if (!/^\d{6}$/.test(code)) return null;
+  const listed = String(process.env.REVIEWER_LOGINS || '')
+    .split(',')
+    .map((pair) => pair.trim().split(':'))
+    .some(([pairRole, pairPhone]) => pairRole === role && String(pairPhone || '').slice(-10) === String(phone).slice(-10));
+  return listed ? code : null;
+};
+
 const roleOf = (value) => {
   const role = String(value ?? 'user').toLowerCase().trim();
   return OTP_ROLES.includes(role) ? role : null;
@@ -140,6 +163,36 @@ export const sendOtp = async (req, res) => {
     const phone = identifier.value;
     const now = Date.now();
 
+    const fixedCode = reviewerCode(phone, role);
+    if (fixedCode) {
+      await LoginOtp.findOneAndUpdate(
+        { phone },
+        {
+          phone,
+          role,
+          codeHash: await bcrypt.hash(fixedCode, 10),
+          attempts: 0,
+          sentAt: new Date(now),
+          // Longer than a customer's code: a reviewer may be slow.
+          codeExpiresAt: new Date(now + 30 * 60 * 1000),
+          windowStartedAt: new Date(now),
+          sendsInWindow: 1,
+          expiresAt: new Date(now + SEND_WINDOW_MS + CODE_TTL_MS),
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      return res.status(200).json({
+        status: 'success',
+        success: true,
+        message: `We sent a 6-digit code to ${maskedPhone(phone)}.`,
+        data: {
+          phone,
+          expiresInSeconds: CODE_TTL_MS / 1000,
+          resendAfterSeconds: RESEND_COOLDOWN_MS / 1000,
+        },
+      });
+    }
+
     const existing = await LoginOtp.findOne({ phone });
 
     if (existing) {
@@ -210,7 +263,12 @@ export const sendOtp = async (req, res) => {
     }
 
     if (!delivered) {
-      console.warn(`[auth] No SMS delivered - sign-in code for ${phone} is ${code}`);
+      // The code itself is never written to a log in production.
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`[auth] No SMS delivered - sign-in code for ${phone} is ${code}`);
+      } else {
+        console.warn(`[auth] No SMS delivered to number ending ${String(phone).slice(-4)}`);
+      }
     }
 
     return res.status(200).json({

@@ -61,6 +61,7 @@ export function Txt({
   numberOfLines,
   style,
   selectable,
+  onPress,
 }: {
   children: React.ReactNode;
   size?: "micro" | "tiny" | "sm" | "base" | "lg" | "xl" | "2xl" | "3xl";
@@ -69,6 +70,8 @@ export function Txt({
   className?: string;
   numberOfLines?: number;
   selectable?: boolean;
+  /** Makes the text tappable, e.g. a link inside a sentence. */
+  onPress?: () => void;
   /** For one-off colours that come from data (accent tints), not tokens. */
   style?: StyleProp<TextStyle>;
 }) {
@@ -92,6 +95,7 @@ export function Txt({
 
   return (
     <Text
+      onPress={onPress}
       numberOfLines={numberOfLines}
       selectable={selectable}
       style={style}

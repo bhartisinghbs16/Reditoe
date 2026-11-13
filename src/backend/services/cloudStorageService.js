@@ -1,9 +1,11 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import s3Client from '../config/s3.js';
+import { assertUploadBuffer } from '../utils/fileSniff.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -35,6 +37,22 @@ class CloudStorageService {
   }
 
   async uploadFile(file, provider = 'local', options = {}) {
+    /*
+     * Identity documents are held to what they really are: the first bytes
+     * must be a genuine image or PDF, whatever the sender named the file.
+     */
+    const target = String(options.category || options.folder || '');
+    if (/^(rider-documents|vendor-documents)/.test(target)) {
+      let head = null;
+      if (Buffer.isBuffer(file.buffer)) head = file.buffer.subarray(0, 16);
+      else if (file.path && fs.existsSync(file.path)) {
+        const fd = fs.openSync(file.path, 'r');
+        head = Buffer.alloc(16);
+        fs.readSync(fd, head, 0, 16, 0);
+        fs.closeSync(fd);
+      }
+      assertUploadBuffer(head);
+    }
     const resolvedProvider = this.normalizeProvider(provider);
     const handler = resolvedProvider === 's3' ? this.handleS3() : this.handleLocal();
     const result = await handler.upload(file, options);
@@ -73,7 +91,7 @@ class CloudStorageService {
         if (!fs.existsSync(categoryDir)) fs.mkdirSync(categoryDir, { recursive: true });
 
         const timestamp = Date.now();
-        const random = Math.random().toString(36).substring(2, 8);
+        const random = crypto.randomBytes(16).toString('hex');
         const extension = path.extname(file.originalname || '') || '.bin';
         const filename = `${timestamp}_${random}${extension}`;
         const storagePath = `${category}/${filename}`;
@@ -111,7 +129,7 @@ class CloudStorageService {
       upload: async (file, options = {}) => {
         const folder = options.folder || options.category || 'uploads';
         const extension = path.extname(file.originalname || '') || '.bin';
-        const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
+        const filename = `${crypto.randomBytes(16).toString('hex')}${extension}`;
         const storagePath = `${folder}/${filename}`;
 
         let body;

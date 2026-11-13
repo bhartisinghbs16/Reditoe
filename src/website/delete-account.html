@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delete your account — Reditoe</title>
+<meta name="description" content="How to delete your Reditoe customer, restaurant or delivery partner account and what happens to your data.">
+<link rel="icon" href="assets/reditoe-logo.cbbe62f6.png">
+<link rel="stylesheet" href="styles.css">
+<style>
+  .delete-form { display: grid; gap: 14px; margin: 18px 0 8px; max-width: 520px; }
+  .delete-form label { display: grid; gap: 6px; font-weight: 600; color: var(--ink-soft); }
+  .delete-form input, .delete-form select, .delete-form textarea {
+    font: inherit; padding: 11px 12px; border: 1px solid #d6d6d6; border-radius: 10px; background: #fff;
+  }
+  .delete-form button { justify-self: start; border: 0; cursor: pointer; }
+  #delete-status { margin-top: 10px; font-weight: 600; }
+  #delete-status.ok { color: #15803d; }
+  #delete-status.bad { color: #b91c1c; }
+</style>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand-mark" href="index.html" aria-label="Reditoe">
+      <img src="assets/reditoe-logo.cbbe62f6.png" alt="Reditoe">
+    </a>
+    <nav class="nav">
+      <a href="index.html#how">How it works</a>
+      <a href="index.html#restaurants">For restaurants</a>
+      <a href="index.html#partners">For riders</a>
+      <a href="index.html#contact">Contact</a>
+    </nav>
+  </div>
+</header>
+
+<main class="legal">
+  <div class="wrap">
+    <h1>Delete your Reditoe account</h1>
+    <p class="updated">Applies to the Reditoe customer app, Reditoe Vendor and Reditoe Delivery Partner</p>
+
+    <h2>Delete it from the app (fastest)</h2>
+    <ul>
+      <li><strong>Customer app:</strong> Account tab → Delete account.</li>
+      <li><strong>Vendor app:</strong> Profile → Account Settings → Delete account.</li>
+      <li><strong>Delivery Partner app:</strong> Profile → Delete account.</li>
+    </ul>
+    <p>The deletion happens straight away. You cannot delete an account while an order is in progress; finish or cancel it first.</p>
+
+    <h2>No longer have the app? Ask us here</h2>
+    <p>Enter the mobile number your account uses. We will call that number to confirm it is you, then delete the account within 30 days.</p>
+
+    <form id="delete-form" class="delete-form">
+      <label>Mobile number
+        <input name="phone" inputmode="numeric" autocomplete="tel" maxlength="14" placeholder="10-digit mobile number" required>
+      </label>
+      <label>Which account?
+        <select name="role">
+          <option value="user">Customer</option>
+          <option value="vendor">Restaurant (Vendor)</option>
+          <option value="rider">Delivery Partner</option>
+        </select>
+      </label>
+      <label>Email (optional)
+        <input name="email" type="email" autocomplete="email" placeholder="you@example.com">
+      </label>
+      <label>Anything you want us to know (optional)
+        <textarea name="reason" rows="3" maxlength="1000"></textarea>
+      </label>
+      <button class="btn btn-primary" type="submit">Request account deletion</button>
+    </form>
+    <p id="delete-status" role="status"></p>
+    <p>Prefer email? Write to <a href="mailto:info@reditoe.com?subject=Delete%20my%20Reditoe%20account">info@reditoe.com</a> from the address on your account.</p>
+
+    <h2>What gets deleted</h2>
+    <ul>
+      <li>Your name, mobile number, email address and profile photo.</li>
+      <li>Saved delivery addresses and your wallet balance.</li>
+      <li>For delivery partners and restaurants: identity documents (such as Aadhaar, PAN, licence), bank details and live location.</li>
+      <li>Notification and device tokens; you are signed out everywhere.</li>
+    </ul>
+
+    <h2>What we keep, and why</h2>
+    <p>
+      Indian tax and accounting law requires us to keep order, invoice, payment and payout records for several years.
+      These stay, but without your personal details: they show only "Deleted user". Anything unspent in a wallet is lost when the account is deleted.
+    </p>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand-mark" href="index.html" aria-label="Reditoe">
+          <img src="assets/reditoe-logo.cbbe62f6.png" alt="Reditoe">
+        </a>
+      </div>
+      <nav class="footer-links">
+        <a href="privacy.html">Privacy Policy</a>
+        <a href="terms.html">Terms &amp; Conditions</a>
+        <a href="refunds.html">Refunds &amp; Cancellations</a>
+        <a href="shipping.html">Delivery Policy</a>
+        <a href="delete-account.html">Delete account</a>
+        <a href="index.html#contact">Contact</a>
+      </nav>
+    </div>
+    <div>© <span id="year">2026</span> Reditoe India LLP. All rights reserved.</div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById("year").textContent = new Date().getFullYear();
+
+  var API = "https://api.reditoe.com/api/public/account-deletion-request";
+  var form = document.getElementById("delete-form");
+  var statusEl = document.getElementById("delete-status");
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var data = new FormData(form);
+    var phone = String(data.get("phone") || "").replace(/\D/g, "").slice(-10);
+    if (!/^[6-9]\d{9}$/.test(phone)) {
+      statusEl.className = "bad";
+      statusEl.textContent = "Enter a valid 10-digit Indian mobile number.";
+      return;
+    }
+    statusEl.className = "";
+    statusEl.textContent = "Sending…";
+    fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        phone: phone,
+        role: data.get("role"),
+        email: data.get("email"),
+        reason: data.get("reason")
+      })
+    })
+      .then(function (res) { return res.json().then(function (body) { return { ok: res.ok, body: body }; }); })
+      .then(function (result) {
+        statusEl.className = result.ok ? "ok" : "bad";
+        statusEl.textContent = (result.body && result.body.message) || (result.ok ? "Request received." : "Could not send your request.");
+        if (result.ok) form.reset();
+      })
+      .catch(function () {
+        statusEl.className = "bad";
+        statusEl.textContent = "Could not send your request. Please email info@reditoe.com instead.";
+      });
+  });
+</script>
+
+</body>
+</html>

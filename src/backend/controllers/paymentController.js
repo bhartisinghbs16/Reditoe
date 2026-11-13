@@ -12,14 +12,12 @@ import crypto from 'crypto';
 
 const verifyWebhookSignature = (req) => {
   try {
-    const receivedSignature = req.headers['x-cf-signature'];
-    if (!receivedSignature) {
-      return true; // Allow in development/test mode if not configured
-    }
-
-    // Cashfree signature verification would go here
-    // For now, we'll allow it in test mode
-    return true;
+    /*
+     * Cashfree is not this platform's gateway - payments run on Razorpay,
+     * which reports to /api/webhooks/razorpay with a verified signature. This
+     * handler used to accept any request as genuine, so it now refuses all.
+     */
+    return false;
   } catch (error) {
     return false;
   }

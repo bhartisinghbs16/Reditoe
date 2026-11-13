@@ -28,6 +28,7 @@ import {
 import rateLimit from 'express-rate-limit';
 import { sendEmail } from '../services/emailService.js';
 import { protect } from '../middleware/auth.js';
+import { deleteMyAccount } from '../controllers/accountDeletionController.js';
 import { uploadProfilePhoto, handleUploadError } from '../middleware/uploadMiddleware.js';
 
 const router = express.Router();
@@ -84,6 +85,8 @@ router.post('/verify-otp', perNetwork(120), verifyOtp);
 
 // A phone that has already proved its number comes back without a code, for a
 // limited time and a limited number of phones (see deviceSessionService).
+// Deleting your own account (required by Google Play). Signed in, any app.
+router.post('/delete-account', perNetwork(10), protect, deleteMyAccount);
 router.post('/remember-login', perNetwork(120), rememberLogin);
 router.post('/forget-device', perNetwork(120), forgetThisDevice);
 
@@ -96,11 +99,11 @@ router.post('/signup', perNetwork(30), uploadProfilePhoto, handleUploadError, si
 
 // Password and Google sign-in no longer exist. These answer 410 with a reason
 // instead of falling through to "route not found".
-router.post('/login', login);
-router.post('/google', googleLogin);
-router.post('/set-password', setPassword);
+router.post('/login', perNetwork(30), login);
+router.post('/google', perNetwork(30), googleLogin);
+router.post('/set-password', perNetwork(30), setPassword);
 
-router.post('/forgot-password', forgotPassword);
+router.post('/forgot-password', perNetwork(20), forgotPassword);
 
 /**
  * Setting a password from an invitation link. No session: the token is the
@@ -110,10 +113,10 @@ router.post('/forgot-password', forgotPassword);
  * OTP-based flow above — registering a second handler on that path silently
  * shadowed this one.
  */
-router.get('/invite/:token', checkSetupToken);
-router.post('/invite/set-password', setPasswordWithToken);
-router.post('/verify-forgot-otp', verifyForgotOTP);
-router.post('/reset-password', resetPassword);
+router.get('/invite/:token', perNetwork(60), checkSetupToken);
+router.post('/invite/set-password', perNetwork(30), setPasswordWithToken);
+router.post('/verify-forgot-otp', perNetwork(30), verifyForgotOTP);
+router.post('/reset-password', perNetwork(30), resetPassword);
 
 // Diagnostics (safe): email and text transport status
 router.get('/email-status', requireDiagnosticsAccess, emailStatus);

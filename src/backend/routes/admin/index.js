@@ -5,6 +5,7 @@
  */
 import express from 'express';
 import { adminProtect } from '../../middleware/adminAuth.js';
+import { listDeletionRequests } from '../../controllers/accountDeletionController.js';
 import { recordAdminActivity } from '../../middleware/activityLogger.js';
 import authRoutes from './authRoutes.js';
 import { getIntegrationStatus } from '../../controllers/admin/adminIntegrationsController.js';
@@ -77,6 +78,7 @@ router.get('/locations', adminProtect, getKnownLocations);
 router.use(recordAdminActivity);
 
 // Protected routes (admin only) - apply adminProtect to each route group
+router.get('/account-deletion-requests', adminProtect, listDeletionRequests);
 router.use('/dashboard', adminProtect, dashboardRoutes);
 router.use('/orders', adminProtect, ordersRoutes);
 router.use('/restaurants', adminProtect, restaurantsRoutes);

@@ -23,12 +23,14 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.reditoe.deliverypartner",
-      "versionCode": 17,
+      "versionCode": 18,
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
       ],
       "googleServicesFile": "./google-services.json"
     },
@@ -50,16 +52,20 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Reditoe uses the camera to scan pickup and delivery QR codes."
+          "cameraPermission": "Reditoe uses the camera to scan pickup and delivery QR codes.",
+          "recordAudioAndroid": false
         }
       ],
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Reditoe uses your location to offer you delivery jobs near where you are."
+          "locationAlwaysAndWhenInUsePermission": "Reditoe uses your location, including in the background while you are on duty, to offer you delivery jobs near you and let customers follow their order.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
-      "./plugins/with-no-session-backup"
+      "./plugins/with-no-session-backup",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -1,12 +1,9 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import Order from '../../models/Order.js';
-import Restaurant from '../../models/Restaurant.js';
-import User from '../../models/User.js';
 import Wallet from '../../models/Wallet.js';
 import WalletTransaction from '../../models/WalletTransaction.js';
-import notificationService from '../../services/notificationService.js';
-import websocketService from '../../services/websocketService.js';
+import { settleOrderPayment, settleWalletTopUp } from '../../utils/razorpaySettlement.js';
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -183,62 +180,27 @@ export const verifyRazorpayPayment = async (req, res) => {
     }
 
     // Replaying the same confirmation must not re-run any of what follows --
-    // the notifications, the vendor's alert, the timeline entry.
-    if (order.paymentStatus === 'paid') {
+    // the notifications, the vendor's alert, the timeline entry. The shared
+    // settlement claims the order atomically, so the app and Razorpay's
+    // webhook can both report the same payment safely.
+    const settled = await settleOrderPayment({
+      razorpayOrderId: razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      source: 'app',
+    });
+
+    if (settled.outcome === 'already_paid') {
       return res.json({
         success: true,
         message: 'Payment already recorded for this order.',
-        data: { orderId: String(order._id), alreadyPaid: true },
-      });
-    }
-
-    order.paymentStatus = 'paid';
-    order.paymentMethod = 'razorpay';
-    order.status = 'Waiting for Confirmation';
-    order.razorpayPaymentId = razorpay_payment_id;
-    order.timeline.push({
-      status: 'Waiting for Confirmation',
-      timestamp: new Date(),
-      message: 'Payment verified successfully. Order is waiting for restaurant confirmation.',
-    });
-    await order.save({ validateBeforeSave: false });
-
-    const restaurant = await Restaurant.findById(order.restaurantId).select('owner');
-    const vendorId = restaurant?.owner ? String(restaurant.owner) : null;
-
-    if (vendorId) {
-      try {
-        await notificationService.storeNotification(
-          vendorId,
-          {
-            title: 'New Order Received',
-            body: `New order ${order.orderNumber || order._id} received. Please accept to start preparing.`,
-            type: 'order',
-            data: {
-              orderId: order._id.toString(),
-              orderNumber: order.orderNumber || order._id.toString(),
-              type: 'new_order',
-            },
-          },
-          'vendor'
-        );
-      } catch (notifyError) {
-        console.error('[VendorOrderNotificationError]', notifyError?.message || notifyError);
-      }
-
-      websocketService.emitOrderLifecycle({
-        order,
-        eventName: 'order_created',
-        source: 'razorpay_payment',
-        vendorId,
-        userId: order.userId ? String(order.userId) : null,
+        data: { orderId: String(order._id), alreadyPaid: true, order: settled.order },
       });
     }
 
     return res.json({
       success: true,
       message: 'Payment verified successfully',
-      data: { order },
+      data: { order: settled.order },
     });
   } catch (error) {
     console.error('Razorpay verify error:', error);
@@ -382,39 +344,26 @@ export const verifyWalletTopUp = async (req, res) => {
       });
     }
 
-    // Replaying the same confirmation must not credit the wallet twice.
-    if (pending.status === 'completed') {
-      const settled = await Wallet.findOne({ userId: req.user._id });
+    // Replaying the same confirmation must not credit the wallet twice; the
+    // shared settlement credits once, whichever of app or webhook is first.
+    const result = await settleWalletTopUp({
+      razorpayOrderId: razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      userId: req.user._id,
+    });
+
+    if (result.outcome === 'already_added') {
       return res.json({
         success: true,
         message: 'This top-up has already been added.',
-        data: { balance: settled?.balance ?? 0, alreadyAdded: true },
+        data: { balance: result.balance, alreadyAdded: true },
       });
     }
-
-    const wallet = await Wallet.findOneAndUpdate(
-      { userId: req.user._id },
-      { $setOnInsert: { userId: req.user._id, balance: 0 } },
-      { new: true, upsert: true }
-    );
-
-    const balanceBefore = wallet.balance;
-    const balanceAfter = balanceBefore + pending.amount;
-
-    pending.status = 'completed';
-    pending.paymentId = razorpay_payment_id;
-    pending.balanceBefore = balanceBefore;
-    pending.balanceAfter = balanceAfter;
-    await pending.save();
-
-    wallet.balance = balanceAfter;
-    await wallet.save();
-    await User.findByIdAndUpdate(req.user._id, { walletBalance: balanceAfter });
 
     return res.json({
       success: true,
       message: 'Wallet topped up.',
-      data: { balance: balanceAfter, added: pending.amount },
+      data: { balance: result.balance, added: result.added },
     });
   } catch (error) {
     console.error('Razorpay wallet verify error:', error);

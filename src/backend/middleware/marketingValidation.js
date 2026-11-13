@@ -425,13 +425,6 @@ export const validateCampaignActivation = async (req, res, next) => {
  */
 export const validateCampaignControl = async (req, res, next) => {
   try {
-    console.log('=== CAMPAIGN CONTROL MIDDLEWARE CALLED ===');
-    console.log('Method:', req.method);
-    console.log('URL:', req.url);
-    console.log('Params:', req.params);
-    console.log('Body:', req.body);
-    console.log('==========================================');
-    
     const { id } = req.params;
     const { action } = req.body; // pause, resume, cancel
 

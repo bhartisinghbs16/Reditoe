@@ -50,6 +50,14 @@ export const protect = async (req, res, next) => {
       });
     }
 
+    // A deleted account's old tokens stop working at once.
+    if (currentUser.deletedAt) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'This account has been deleted.',
+      });
+    }
+
     // Grant access to protected route
     req.user = currentUser;
     next();

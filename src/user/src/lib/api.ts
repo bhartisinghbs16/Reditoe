@@ -3,6 +3,7 @@ import type { CartLine } from "@/lib/store";
 import type { Dish, Extra, Offer, Portion, Restaurant } from "@/lib/data";
 import type { AccentKey } from "@/lib/theme";
 import type { PhotoKey } from "@/lib/images";
+import { getSecureItem, setSecureItem, removeSecureItem } from "./secure-storage";
 
 /**
  * Client for the Reditoe API (`working/backend`).
@@ -183,8 +184,8 @@ export const setAuthToken = (token: string | null) => {
   // it needs whether or not the write has landed.
   if (!storage) {
     (token
-      ? AsyncStorage.setItem(TOKEN_KEY, token)
-      : AsyncStorage.removeItem(TOKEN_KEY)
+      ? setSecureItem(TOKEN_KEY, token)
+      : removeSecureItem(TOKEN_KEY)
     ).catch(() => {
       /* a failed write costs the session on next launch, nothing sooner */
     });
@@ -211,7 +212,7 @@ export const hydrateAuthToken = async (): Promise<string | null> => {
   if (authToken) return authToken;
   if (storage) return getAuthToken();
   try {
-    authToken = await AsyncStorage.getItem(TOKEN_KEY);
+    authToken = await getSecureItem(TOKEN_KEY);
   } catch {
     authToken = null;
   }
@@ -282,7 +283,7 @@ export async function getDeviceId(): Promise<string> {
 
 async function readRemembered(): Promise<RememberedDevice | null> {
   try {
-    const raw = await AsyncStorage.getItem(REMEMBER_KEY);
+    const raw = await getSecureItem(REMEMBER_KEY);
     if (!raw) return null;
     const record = JSON.parse(raw) as Partial<RememberedDevice>;
     if (!record?.token || !record.phone || !record.expiresAt) return null;
@@ -298,7 +299,7 @@ async function readRemembered(): Promise<RememberedDevice | null> {
 
 async function saveRemembered(record: RememberedDevice) {
   try {
-    await AsyncStorage.setItem(REMEMBER_KEY, JSON.stringify(record));
+    await setSecureItem(REMEMBER_KEY, JSON.stringify(record));
   } catch {
     // Not remembered; the next sign-in simply asks for a code.
   }
@@ -306,7 +307,7 @@ async function saveRemembered(record: RememberedDevice) {
 
 async function clearRemembered() {
   try {
-    await AsyncStorage.removeItem(REMEMBER_KEY);
+    await removeSecureItem(REMEMBER_KEY);
   } catch {
     // Nothing more to do.
   }
@@ -942,6 +943,10 @@ function orderLine(line: CartLine) {
 }
 
 export const api = {
+  /** Permanently deletes this account (personal details are erased). */
+  deleteAccount: () =>
+    request("/auth/delete-account", { method: "POST", auth: true, body: { confirm: "DELETE" } }),
+
   /** Where this device should receive its order updates. */
   registerPushToken: (token: string, deviceInfo: Record<string, unknown>) =>
     request("/push-notifications/token", { method: "POST", auth: true, body: { token, deviceInfo } }),

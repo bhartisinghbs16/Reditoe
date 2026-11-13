@@ -1,5 +1,7 @@
 import * as Location from "expo-location";
 import { api } from "@/lib/api";
+import { requestLocationWithDisclosure } from "./location-permission";
+import { setActiveOrder } from "./background-location";
 
 /**
  * Sending the rider's position while they are working.
@@ -40,8 +42,7 @@ export async function canShareLocation(): Promise<boolean> {
 export async function startSharing(orderId: string): Promise<boolean> {
   if (sharingFor === orderId && subscription) return true;
 
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== "granted") return false;
+  if (!(await requestLocationWithDisclosure())) return false;
 
   await stopSharing();
 
@@ -69,6 +70,7 @@ export async function startSharing(orderId: string): Promise<boolean> {
   );
 
   sharingFor = orderId;
+  void setActiveOrder(orderId);
   return true;
 }
 
@@ -77,6 +79,7 @@ export async function stopSharing(): Promise<void> {
   subscription?.remove();
   subscription = null;
   sharingFor = null;
+  void setActiveOrder(null);
 }
 
 /** The order currently being shared, if any. */

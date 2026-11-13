@@ -90,6 +90,7 @@ export function Txt({
   className = "",
   numberOfLines,
   style,
+  onPress,
 }: {
   children: React.ReactNode;
   size?: "micro" | "tiny" | "sm" | "base" | "lg" | "xl" | "2xl" | "3xl" | "4xl";
@@ -97,6 +98,8 @@ export function Txt({
   tone?: TextTone;
   className?: string;
   numberOfLines?: number;
+  /** Makes the text tappable, e.g. a link inside a sentence. */
+  onPress?: () => void;
   /** For one-off colours that come from data (tints, chart marks), not tokens. */
   style?: StyleProp<TextStyle>;
 }) {
@@ -121,6 +124,7 @@ export function Txt({
 
   return (
     <Text
+      onPress={onPress}
       numberOfLines={numberOfLines}
       style={style}
       className={`${sizes} ${weights} ${textTones[tone]} ${className}`}

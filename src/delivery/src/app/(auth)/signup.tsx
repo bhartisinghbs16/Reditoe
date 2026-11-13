@@ -1,5 +1,6 @@
 import React from "react";
 import { ActivityIndicator, Pressable, View } from "react-native";
+import { Linking } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { clearDraft, loadDraft, saveDraft, type RiderDraft } from "@/lib/registration";
@@ -197,11 +198,21 @@ export default function Signup() {
             </View>
             <Txt size="sm" tone="soft" className="flex-1">
               I agree to the{" "}
-              <Txt size="sm" weight="semibold" tone="brand">
+              <Txt
+                size="sm"
+                weight="semibold"
+                tone="brand"
+                onPress={() => void Linking.openURL("https://www.reditoe.com/terms.html")}
+              >
                 Terms &amp; Conditions
               </Txt>{" "}
               and{" "}
-              <Txt size="sm" weight="semibold" tone="brand">
+              <Txt
+                size="sm"
+                weight="semibold"
+                tone="brand"
+                onPress={() => void Linking.openURL("https://www.reditoe.com/privacy.html")}
+              >
                 Privacy Policy
               </Txt>
             </Txt>

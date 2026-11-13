@@ -22,6 +22,7 @@ import { registerVendor, uploadKycDocument } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { VerifiedField } from "@/components/verified-field";
 import { tints, type TintName } from "@/lib/theme";
+import { requestLocationWithDisclosure } from "@/lib/location-permission";
 
 /**
  * Vendor Sign Up — a copy of the reference five-step onboarding flow:
@@ -263,7 +264,7 @@ function RestaurantStep({
     setLocating(true);
     setLocationError(null);
     try {
-      const permission = await Location.requestForegroundPermissionsAsync();
+      const permission = { granted: await requestLocationWithDisclosure() };
       if (!permission.granted) {
         setLocationError(
           "Location permission was refused. Allow it in Settings so riders can be matched to your restaurant."

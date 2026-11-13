@@ -112,7 +112,11 @@ export async function sendSetupInvite({ user, businessName, subject }) {
   );
 
   if (!sent) {
-    console.warn(`[invite] No email provider configured — set-password link for ${user.email}: ${link}`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[invite] No email provider configured — set-password link for ${user.email}: ${link}`);
+    } else {
+      console.warn('[invite] No email provider configured - invite was not delivered');
+    }
   }
 
   return {

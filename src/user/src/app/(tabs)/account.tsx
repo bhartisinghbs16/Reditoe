@@ -400,6 +400,41 @@ export default function AccountScreen() {
           </Txt>
         </Pressable>
 
+        <Pressable
+          className="mx-4 mt-3 flex-row items-center justify-center gap-2 py-3 active:opacity-70"
+          accessibilityLabel="Delete account"
+          onPress={() =>
+            Alert.alert(
+              "Delete your account?",
+              "This permanently erases your profile, saved addresses and wallet balance. Order records the law requires us to keep stay, without your personal details. This cannot be undone.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Delete account",
+                  style: "destructive",
+                  onPress: async () => {
+                    try {
+                      await api.deleteAccount();
+                      signOut();
+                      router.replace("/signin");
+                    } catch (error) {
+                      Alert.alert(
+                        "Could not delete account",
+                        error instanceof Error ? error.message : "Please try again."
+                      );
+                    }
+                  },
+                },
+              ]
+            )
+          }
+        >
+          <Ionicons name="trash-outline" size={17} color="#B91C1C" />
+          <Txt weight="bold" style={{ color: "#B91C1C" }}>
+            Delete account
+          </Txt>
+        </Pressable>
+
         {/* The build's own version, not a number typed in once and left. */}
         <Txt size="micro" tone="faint" className="mt-4 text-center">
           Reditoe · Version {Constants.expoConfig?.version ?? "—"}
