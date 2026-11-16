@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, Pressable, ScrollView, View } from "react-native";
+import { Linking, Modal, Pressable, ScrollView, View } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as Location from "expo-location";
@@ -870,12 +870,16 @@ function ReviewSection({
 function ReviewStep({
   confirmed,
   setConfirmed,
+  agreed,
+  setAgreed,
   cuisines,
   form,
   onEditStep,
 }: {
   confirmed: boolean;
   setConfirmed: (next: boolean) => void;
+  agreed: boolean;
+  setAgreed: (next: boolean) => void;
   cuisines: string[];
   form: Form;
   onEditStep: (step: number) => void;
@@ -953,6 +957,24 @@ function ReviewStep({
           checked={confirmed}
           onToggle={() => setConfirmed(!confirmed)}
         />
+        <CheckRow
+          label="I have read and agree to the Vendor Agreement, Terms & Conditions and Privacy Policy, and consent to Reditoe verifying my KYC documents."
+          checked={agreed}
+          onToggle={() => setAgreed(!agreed)}
+        />
+        <View className="flex-row flex-wrap gap-x-4 gap-y-1 pb-3 pl-9">
+          {[
+            ["Vendor Agreement", "https://www.reditoe.com/vendor-agreement.html"],
+            ["Terms & Conditions", "https://www.reditoe.com/terms.html"],
+            ["Privacy Policy", "https://www.reditoe.com/privacy.html"],
+          ].map(([label, url]) => (
+            <Pressable key={url} hitSlop={6} onPress={() => void Linking.openURL(url)}>
+              <Txt size="sm" weight="semibold" tone="brand">
+                {label}
+              </Txt>
+            </Pressable>
+          ))}
+        </View>
       </Card>
     </View>
   );
@@ -1077,6 +1099,7 @@ export default function VendorSignUp() {
   const [step, setStep] = React.useState(0);
   const [cuisines, setCuisines] = React.useState<string[]>(["North Indian"]);
   const [confirmed, setConfirmed] = React.useState(false);
+  const [agreed, setAgreed] = React.useState(false);
   /** documentType -> the file name we put up, so the step can show what is done. */
   const [uploaded, setUploaded] = React.useState<Record<string, string>>({});
   const [busy, setBusy] = React.useState(false);
@@ -1311,6 +1334,8 @@ export default function VendorSignUp() {
           <ReviewStep
             confirmed={confirmed}
             setConfirmed={setConfirmed}
+            agreed={agreed}
+            setAgreed={setAgreed}
             cuisines={cuisines}
             form={form}
             onEditStep={setStep}
@@ -1365,7 +1390,7 @@ export default function VendorSignUp() {
               label={busy ? "Submitting…" : review ? "Submit for Verification" : "Save & Continue"}
               iconRight={busy ? undefined : "chevron-forward"}
               loading={busy}
-              disabled={(review && !confirmed) || Boolean(stepProblem)}
+              disabled={(review && (!confirmed || !agreed)) || Boolean(stepProblem)}
               className={step > 0 ? "flex-[1.6]" : "flex-1"}
               onPress={() => {
                 /*

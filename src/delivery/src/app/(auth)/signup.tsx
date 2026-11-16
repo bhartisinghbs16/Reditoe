@@ -193,11 +193,22 @@ export default function Signup() {
               <CheckBox
                 checked={agreed}
                 onChange={setAgreed}
-                accessibilityLabel="Agree to the terms and privacy policy"
+                accessibilityLabel="Agree to the delivery partner agreement, terms and privacy policy"
               />
             </View>
             <Txt size="sm" tone="soft" className="flex-1">
               I agree to the{" "}
+              <Txt
+                size="sm"
+                weight="semibold"
+                tone="brand"
+                onPress={() =>
+                  void Linking.openURL("https://www.reditoe.com/delivery-partner-agreement.html")
+                }
+              >
+                Delivery Partner Agreement
+              </Txt>
+              ,{" "}
               <Txt
                 size="sm"
                 weight="semibold"
@@ -215,6 +226,7 @@ export default function Signup() {
               >
                 Privacy Policy
               </Txt>
+              , and consent to my identity documents and location being collected as described there.
             </Txt>
           </View>
 
