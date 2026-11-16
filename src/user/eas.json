@@ -20,7 +20,7 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://api.reditoe.com/api"
+        "EXPO_PUBLIC_API_URL": "https://reditoe-production.up.railway.app/api"
       },
       "credentialsSource": "local"
     }
