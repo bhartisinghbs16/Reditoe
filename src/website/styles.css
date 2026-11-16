@@ -412,6 +412,11 @@ h2 {
 .legal ul { padding-left: 20px; }
 .legal li { margin-bottom: 7px; }
 
+.legal h3 { font-size: 1.02rem; margin: 22px 0 6px; }
+.legal table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 0.95rem; }
+.legal th, .legal td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; color: var(--ink-soft); }
+.legal th { background: var(--sunken); }
+
 .callout {
   background: var(--sunken);
   border: 1px solid var(--line);
