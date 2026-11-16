@@ -23,7 +23,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.reditoe.app",
-      "versionCode": 26,
+      "versionCode": 27,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
